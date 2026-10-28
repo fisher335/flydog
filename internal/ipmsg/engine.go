@@ -95,8 +95,8 @@ type Engine struct {
 
 	members *MemberTable
 
-	packetNo  uint32
-	fileID    uint32
+	packetNo   uint32
+	fileID     uint32
 	versionStr string
 
 	mu       sync.Mutex
@@ -360,6 +360,21 @@ func (e *Engine) handleFrom(pkt *Packet, ip string, port int) {
 		UTF8:    pkt.UTF8,
 	}
 
+	// 飞秋/飞鸽把用户昵称放在附加区，报文头里的 SenderName 通常是登录名。
+	// 对上线类报文以附加区为准；其它报文沿用已知昵称，避免被登录名覆盖。
+	switch GetMode(pkt.Command) {
+	case CmdBrEntry, CmdAnsEntry, CmdBrAbsence:
+		if n, g := parseEntryExtra(pkt.Extra, pkt.UTF8); n != "" {
+			m.Name = n
+			m.Group = g
+		}
+	default:
+		if info, ok := e.members.Lookup(ip, port); ok {
+			m.Name = info.Name
+			m.Group = info.Group
+		}
+	}
+
 	switch GetMode(pkt.Command) {
 	case CmdNoOperation:
 		return
@@ -369,7 +384,7 @@ func (e *Engine) handleFrom(pkt *Packet, ip string, port int) {
 		return
 	case CmdBrEntry, CmdAnsEntry, CmdBrAbsence:
 		if _, changed := e.members.Upsert(m); changed {
-			e.logf("发现用户 %q (%s:%d) cmd=0x%x", m.Name, ip, port, GetMode(pkt.Command))
+			e.logf("发现用户 %q (%s:%d) cmd=0x%x group=%q", m.Name, ip, port, GetMode(pkt.Command), m.Group)
 			e.notifyMembers()
 		}
 		if GetMode(pkt.Command) == CmdBrEntry {

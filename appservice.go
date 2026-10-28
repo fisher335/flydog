@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log"
 	"os"
 	"path/filepath"
@@ -64,6 +65,34 @@ func (a *App) trayEnabled() bool { return a.trayMode.Load() }
 
 func (a *App) markQuit() { a.quitting.Store(true) }
 
+// GetAutostart reports whether FlyDog is registered to launch at login.
+func (a *App) GetAutostart() bool {
+	app := application.Get()
+	if app == nil || app.Autostart == nil {
+		return false
+	}
+	on, err := app.Autostart.IsEnabled()
+	if err != nil {
+		return false
+	}
+	return on
+}
+
+// SetAutostart registers or removes the login-launch entry. When enabled the
+// app starts hidden in the system tray.
+func (a *App) SetAutostart(enabled bool) error {
+	app := application.Get()
+	if app == nil || app.Autostart == nil {
+		return errors.New("当前平台不支持开机自启")
+	}
+	if enabled {
+		return app.Autostart.EnableWithOptions(application.AutostartOptions{
+			Arguments: []string{"--hidden"},
+		})
+	}
+	return app.Autostart.Disable()
+}
+
 func emit(name string, data any) {
 	if app := application.Get(); app != nil {
 		app.Event.Emit(name, data)
@@ -89,6 +118,12 @@ type UserConfig struct {
 	AutoReceive    bool   `json:"autoReceive"`
 	Avatar         string `json:"avatar"`
 	MinimizeToTray bool   `json:"minimizeToTray"`
+
+	// Night off (scheduled network adapter disable)
+	NightOffEnabled bool   `json:"nightOffEnabled"`
+	NightOffAdapter string `json:"nightOffAdapter"`
+	NightOffStart   string `json:"nightOffStart"`
+	NightOffEnd     string `json:"nightOffEnd"`
 }
 
 func configDir() string {
@@ -154,7 +189,14 @@ func (a *App) ClearHistory() error {
 
 func defaultUserConfig() UserConfig {
 	host, _ := os.Hostname()
-	return UserConfig{Name: host, DownloadDir: defaultDownloadDir(), AutoReceive: true, MinimizeToTray: true}
+	return UserConfig{
+		Name:           host,
+		DownloadDir:    defaultDownloadDir(),
+		AutoReceive:    true,
+		MinimizeToTray: true,
+		NightOffStart:  "22:00",
+		NightOffEnd:    "06:00",
+	}
 }
 
 // LoadConfig reads the persisted configuration (falling back to defaults).
@@ -168,6 +210,12 @@ func (a *App) LoadConfig() UserConfig {
 	}
 	if cfg.DownloadDir == "" {
 		cfg.DownloadDir = defaultDownloadDir()
+	}
+	if cfg.NightOffStart == "" {
+		cfg.NightOffStart = "22:00"
+	}
+	if cfg.NightOffEnd == "" {
+		cfg.NightOffEnd = "06:00"
 	}
 	a.trayMode.Store(cfg.MinimizeToTray)
 	return cfg

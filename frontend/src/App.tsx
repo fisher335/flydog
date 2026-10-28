@@ -6,14 +6,21 @@ import {App as AppSvc} from '../bindings/flydog';
 const {
     AddPeer,
     ClearHistory,
+    GetAutostart,
     GetMembers,
+    InstallNightOff,
     IsRunning,
+    ListAdapters,
     LoadConfig,
     LoadHistory,
+    NightOffLastRuns,
+    NightOffNow,
+    NightOffStatus,
     OpenDownloadDir,
     OpenYou,
     PickFiles,
     PickFolder,
+    RemoveNightOff,
     Rescan,
     SaveConfig,
     SaveHistory,
@@ -23,6 +30,7 @@ const {
     SendText,
     SendTyping,
     SetName,
+    SetAutostart,
     Start,
     Stop,
 } = AppSvc;
@@ -34,6 +42,7 @@ function onEvent(name: string, cb: (data: any) => void): () => void {
 
 interface Member {
     name: string;
+    group?: string;
     host: string;
     ip: string;
     port: number;
@@ -67,6 +76,13 @@ interface Toast {
     body: string;
 }
 
+const SETTINGS_TABS = [
+    {key: 'profile', icon: '👤', label: '个人'},
+    {key: 'files', icon: '📁', label: '文件与记录'},
+    {key: 'network', icon: '🌐', label: '网络'},
+    {key: 'system', icon: '⚙️', label: '系统'},
+];
+
 const EMOJIS = [
     '😀', '😁', '😂', '🤣', '😊', '😍', '😘', '😜', '🤔', '😎', '😭', '😡',
     '👍', '👎', '👌', '🙏', '👏', '💪', '🎉', '🔥', '💯', '❤️', '💔', '🌹',
@@ -90,37 +106,75 @@ function hashIndex(name: string): number {
     return hashHue(name || '?') % AVATAR_COUNT;
 }
 
-// BuiltinAvatar draws one of a set of classic cartoon-style avatars (in the
-// spirit of the old QQ default faces) as an inline SVG, so no image assets are
-// needed and every user gets a face automatically.
+// BuiltinAvatar renders a minimal geometric avatar as inline SVG: a soft
+// gradient background with an abstract mark. No image assets, no cartoon faces.
+const AVATAR_PALETTES: [string, string][] = [
+    ['#6366f1', '#8b5cf6'],
+    ['#0ea5e9', '#22d3ee'],
+    ['#f97316', '#f59e0b'],
+    ['#ec4899', '#f43f5e'],
+    ['#10b981', '#34d399'],
+    ['#64748b', '#94a3b8'],
+    ['#8b5cf6', '#d946ef'],
+    ['#0f766e', '#14b8a6'],
+];
+
 function BuiltinAvatar({index, size}: {index: number; size: number}) {
-    const bgs = ['#8fd3f4', '#f7a5c4', '#ffd27f', '#a8e6a3', '#c0b3ff', '#ffb59e', '#9fd8cb', '#f2b5d4'];
-    const hairs = ['#3a3a3a', '#5b3a29', '#7a4a2b', '#2f2f2f'];
-    const skins = ['#ffe0c2', '#ffd6b0', '#ffeadb'];
     const i = ((index % AVATAR_COUNT) + AVATAR_COUNT) % AVATAR_COUNT;
-    const bg = bgs[i % bgs.length];
-    const hair = hairs[Math.floor(i / bgs.length) % hairs.length];
-    const skin = skins[i % skins.length];
-    const happy = i % 2 === 0;
+    const [c1, c2] = AVATAR_PALETTES[i % AVATAR_PALETTES.length];
+    const shape = i % 6;
+    const gid = `av-${i}`;
     return (
         <svg width={size} height={size} viewBox="0 0 100 100" style={{display: 'block'}}>
-            <rect width="100" height="100" fill={bg} />
-            <circle cx="50" cy="58" r="30" fill={skin} />
-            <ellipse cx="50" cy="40" rx="30" ry="17" fill={hair} />
-            {happy ? (
+            <defs>
+                <linearGradient id={gid} x1="0" y1="0" x2="1" y2="1">
+                    <stop offset="0%" stopColor={c1} />
+                    <stop offset="100%" stopColor={c2} />
+                </linearGradient>
+            </defs>
+            <rect width="100" height="100" fill={`url(#${gid})`} />
+            {shape === 0 && (
+                <g fill="none" stroke="#fff" strokeOpacity="0.9" strokeWidth="2.6">
+                    <circle cx="50" cy="50" r="26" />
+                    <circle cx="50" cy="50" r="16" />
+                    <circle cx="50" cy="50" r="6" fill="#fff" fillOpacity="0.95" stroke="none" />
+                </g>
+            )}
+            {shape === 1 && (
                 <>
-                    <path d="M36 57 q4 -7 8 0" stroke="#333" strokeWidth="2.6" fill="none" strokeLinecap="round" />
-                    <path d="M56 57 q4 -7 8 0" stroke="#333" strokeWidth="2.6" fill="none" strokeLinecap="round" />
-                </>
-            ) : (
-                <>
-                    <circle cx="40" cy="57" r="3.6" fill="#333" />
-                    <circle cx="60" cy="57" r="3.6" fill="#333" />
+                    <rect x="32" y="32" width="36" height="36" rx="7" transform="rotate(45 50 50)" fill="none" stroke="#fff" strokeOpacity="0.9" strokeWidth="2.8" />
+                    <circle cx="50" cy="50" r="6" fill="#fff" fillOpacity="0.95" />
                 </>
             )}
-            <circle cx="33" cy="66" r="5" fill="#ff9aa2" opacity="0.55" />
-            <circle cx="67" cy="66" r="5" fill="#ff9aa2" opacity="0.55" />
-            <path d="M43 70 q7 7 14 0" stroke="#c0392b" strokeWidth="2.6" fill="none" strokeLinecap="round" />
+            {shape === 2 && (
+                <g fill="none" stroke="#fff" strokeOpacity="0.9" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M34 34 L50 50 L34 66" />
+                    <path d="M54 34 L70 50 L54 66" />
+                </g>
+            )}
+            {shape === 3 && (
+                <g fill="none" stroke="#fff" strokeOpacity="0.85" strokeWidth="2.8" strokeLinecap="round">
+                    <path d="M24 40 q7 -9 13 0 t13 0 t13 0 t13 0" />
+                    <path d="M24 52 q7 -9 13 0 t13 0 t13 0 t13 0" />
+                    <path d="M24 64 q7 -9 13 0 t13 0 t13 0 t13 0" />
+                </g>
+            )}
+            {shape === 4 && (
+                <g fill="#fff" fillOpacity="0.9">
+                    {[0, 1, 2].map((r) =>
+                        [0, 1, 2].map((c) => (
+                            <circle key={`${r}-${c}`} cx={34 + c * 16} cy={34 + r * 16} r="3.8" />
+                        )),
+                    )}
+                </g>
+            )}
+            {shape === 5 && (
+                <g fill="none" stroke="#fff" strokeOpacity="0.9" strokeWidth="4" strokeLinecap="round">
+                    <path d="M28 64 a22 22 0 0 1 44 0" />
+                    <path d="M50 42 V30" />
+                    <circle cx="50" cy="42" r="4.5" fill="#fff" stroke="none" />
+                </g>
+            )}
         </svg>
     );
 }
@@ -205,6 +259,7 @@ function App() {
     const [error, setError] = useState('');
 
     const [showSettings, setShowSettings] = useState(false);
+    const [settingsTab, setSettingsTab] = useState('profile');
     const [showTransfers, setShowTransfers] = useState(true);
     const [search, setSearch] = useState('');
     const [peerIp, setPeerIp] = useState('');
@@ -213,9 +268,26 @@ function App() {
     const [myAvatar, setMyAvatar] = useState('');
     const [showAvatars, setShowAvatars] = useState(false);
     const [trayMode, setTrayMode] = useState(true);
+    const [autostart, setAutostart] = useState(false);
+
+    // 夜间断网
+    const [nightOffEnabled, setNightOffEnabled] = useState(false);
+    const [nightOffAdapter, setNightOffAdapter] = useState('');
+    const [nightOffStart, setNightOffStart] = useState('22:00');
+    const [nightOffEnd, setNightOffEnd] = useState('06:00');
+    const [adapters, setAdapters] = useState<{index: number; name: string; desc: string; status: string}[]>([]);
+    const [nightOffInstalled, setNightOffInstalled] = useState(false);
+    const [nightOffBusy, setNightOffBusy] = useState(false);
+    const [lastRuns, setLastRuns] = useState({
+        disableTime: '',
+        disableStatus: '',
+        enableTime: '',
+        enableStatus: '',
+    });
     const [theme, setTheme] = useState<string>(() => localStorage.getItem('flydog.theme') || 'light');
 
     const seq = useRef(0);
+    const cfgRef = useRef<any>({});
     const selectedRef = useRef('');
     const focusRef = useRef(true);
     const bootRef = useRef(false);
@@ -228,6 +300,20 @@ function App() {
     useEffect(() => {
         selectedRef.current = selectedKey;
     }, [selectedKey]);
+
+    useEffect(() => {
+        cfgRef.current = {
+            name,
+            downloadDir,
+            autoReceive,
+            avatar: myAvatar,
+            minimizeToTray: trayMode,
+            nightOffEnabled,
+            nightOffAdapter,
+            nightOffStart,
+            nightOffEnd,
+        };
+    }, [name, downloadDir, autoReceive, myAvatar, trayMode, nightOffEnabled, nightOffAdapter, nightOffStart, nightOffEnd]);
 
     useEffect(() => {
         document.documentElement.dataset.theme = theme;
@@ -255,6 +341,14 @@ function App() {
                 setDownloadDir(c.downloadDir);
                 setAutoReceive(c.autoReceive);
                 setTrayMode(c.minimizeToTray);
+                GetAutostart().then(setAutostart).catch(() => undefined);
+                setNightOffEnabled(!!c.nightOffEnabled);
+                setNightOffAdapter(c.nightOffAdapter || '');
+                setNightOffStart(c.nightOffStart || '22:00');
+                setNightOffEnd(c.nightOffEnd || '06:00');
+                ListAdapters().then((list: any) => setAdapters(list || [])).catch(() => undefined);
+                NightOffStatus().then(setNightOffInstalled).catch(() => undefined);
+                NightOffLastRuns().then((r: any) => r && setLastRuns(r)).catch(() => undefined);
                 let av = c.avatar;
                 if (!av) av = 'builtin:' + Math.floor(Math.random() * AVATAR_COUNT);
                 setMyAvatar(av);
@@ -265,6 +359,10 @@ function App() {
                         autoReceive: c.autoReceive,
                         avatar: av,
                         minimizeToTray: c.minimizeToTray,
+                        nightOffEnabled: c.nightOffEnabled,
+                        nightOffAdapter: c.nightOffAdapter,
+                        nightOffStart: c.nightOffStart,
+                        nightOffEnd: c.nightOffEnd,
                     }).catch(() => undefined);
                 }
                 if (await IsRunning()) {
@@ -498,12 +596,17 @@ function App() {
 
     function persist(n: string, dir: string, auto: boolean, avatar: string, tray: boolean) {
         SaveConfig({
+            ...cfgRef.current,
             name: n,
             downloadDir: dir,
             autoReceive: auto,
             avatar,
             minimizeToTray: tray,
-        }).catch(() => undefined);
+        } as any).catch(() => undefined);
+    }
+
+    function saveCfg(overrides: any) {
+        SaveConfig({...cfgRef.current, ...overrides} as any).catch(() => undefined);
     }
 
     function applyName() {
@@ -517,6 +620,68 @@ function App() {
         setMyAvatar(v);
         persist(name, downloadDir, autoReceive, v, trayMode);
         setShowAvatars(false);
+    }
+
+    function refreshLastRuns() {
+        NightOffLastRuns()
+            .then((r: any) => r && setLastRuns(r))
+            .catch(() => undefined);
+    }
+
+    async function applyNightOff() {
+        if (!nightOffAdapter) {
+            setError('请先选择要断开的网卡');
+            return;
+        }
+        setNightOffBusy(true);
+        setError('');
+        try {
+            await InstallNightOff(Number(nightOffAdapter), nightOffStart, nightOffEnd);
+            saveCfg({nightOffEnabled: true, nightOffAdapter, nightOffStart, nightOffEnd});
+            setNightOffEnabled(true);
+            setNightOffInstalled(await NightOffStatus());
+        } catch (e: any) {
+            setError(String(e));
+        } finally {
+            setNightOffBusy(false);
+            refreshLastRuns();
+        }
+    }
+
+    async function removeNightOff() {
+        setNightOffBusy(true);
+        setError('');
+        try {
+            await RemoveNightOff();
+            saveCfg({nightOffEnabled: false});
+            setNightOffEnabled(false);
+            setNightOffInstalled(await NightOffStatus());
+        } catch (e: any) {
+            setError(String(e));
+        } finally {
+            setNightOffBusy(false);
+            refreshLastRuns();
+        }
+    }
+
+    async function nightOffNow(enable: boolean) {
+        if (!nightOffAdapter) {
+            setError('请先选择网卡');
+            return;
+        }
+        if (!enable && !window.confirm(`确定现在禁用网卡「${nightOffAdapterName}」？\n禁用后将暂时断网。`)) {
+            return;
+        }
+        setNightOffBusy(true);
+        setError('');
+        try {
+            await NightOffNow(Number(nightOffAdapter), enable);
+        } catch (e: any) {
+            setError(String(e));
+        } finally {
+            setNightOffBusy(false);
+            refreshLastRuns();
+        }
     }
 
     function uploadAvatar(file: File) {
@@ -565,6 +730,8 @@ function App() {
     }
 
     const chat = selectedKey ? convs[selectedKey] || [] : [];
+    const nightOffAdapterName =
+        adapters.find((a) => String(a.index) === nightOffAdapter)?.name || nightOffAdapter || '未选择';
 
     return (
         <div className={'app' + (shake ? ' shake' : '')}>
@@ -625,6 +792,7 @@ function App() {
                                     <div className="contact-name">{m.name || m.ip}</div>
                                     <div className="contact-sub">
                                         {m.ip}
+                                        {m.group ? ` · ${m.group}` : ''}
                                         {m.host && m.host !== m.name ? ` · ${m.host}` : ''}
                                         {m.absence ? ' · 离开' : ''}
                                     </div>
@@ -652,7 +820,7 @@ function App() {
                             <div className="chat-title">
                                 <div className="chat-name">{selected.name}</div>
                                 <div className={'chat-sub' + (typing[selectedKey] ? ' typing' : '')}>
-                                    {typing[selectedKey] ? '正在输入…' : `${selected.ip}${selected.absence ? ' · 离开' : ''}`}
+                                    {typing[selectedKey] ? '正在输入…' : `${selected.ip}${selected.group ? ' · ' + selected.group : ''}${selected.absence ? ' · 离开' : ''}`}
                                 </div>
                             </div>
                             <div className="chat-actions">
@@ -809,7 +977,7 @@ function App() {
                                         key={i}
                                         className={'avatar-cell' + (myAvatar === 'builtin:' + i ? ' active' : '')}
                                         onClick={() => chooseAvatar('builtin:' + i)}
-                                        title={'经典头像 ' + (i + 1)}
+                                        title={'头像 ' + (i + 1)}
                                     >
                                         <BuiltinAvatar index={i} size={64} />
                                     </button>
@@ -841,84 +1009,239 @@ function App() {
 
             {showSettings && (
                 <div className="modal-mask" onClick={() => setShowSettings(false)}>
-                    <div className="modal" onClick={(e) => e.stopPropagation()}>
+                    <div className="modal settings" onClick={(e) => e.stopPropagation()}>
                         <div className="modal-head">
                             <span>设置</span>
                             <button className="icon-btn" onClick={() => setShowSettings(false)}>✕</button>
                         </div>
-                        <div className="modal-body">
-                            <label className="field">
-                                <span>昵称（修改后自动广播给其他人）</span>
-                                <input
-                                    value={name}
-                                    onChange={(e) => setName(e.target.value)}
-                                    onBlur={applyName}
-                                    onKeyDown={(e) => {
-                                        if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
-                                    }}
-                                />
-                            </label>
-                            <div className="field row">
-                                <Avatar src={myAvatar} name={name} size={40} />
-                                <button className="btn" onClick={() => setShowAvatars(true)}>更换头像</button>
-                                <span className="muted">其他人默认随机经典头像</span>
-                            </div>
-                            <label className="field">
-                                <span>接收目录（下次启动生效）</span>
-                                <input
-                                    value={downloadDir}
-                                    onChange={(e) => {
-                                        setDownloadDir(e.target.value);
-                                        persist(name, e.target.value, autoReceive, myAvatar, trayMode);
-                                    }}
-                                />
-                            </label>
-                            <label className="field row">
-                                <input
-                                    type="checkbox"
-                                    checked={autoReceive}
-                                    onChange={(e) => {
-                                        setAutoReceive(e.target.checked);
-                                        persist(name, downloadDir, e.target.checked, myAvatar, trayMode);
-                                    }}
-                                />
-                                <span>自动接收文件</span>
-                            </label>
-                            <label className="field row">
-                                <input
-                                    type="checkbox"
-                                    checked={trayMode}
-                                    onChange={(e) => {
-                                        setTrayMode(e.target.checked);
-                                        persist(name, downloadDir, autoReceive, myAvatar, e.target.checked);
-                                    }}
-                                />
-                                <span>关闭窗口时最小化到托盘（右键托盘图标可退出）</span>
-                            </label>
-                            <div className="field row">
-                                <button
-                                    className="btn"
-                                    onClick={() => {
-                                        setConvs({});
-                                        ClearHistory().catch(() => undefined);
-                                    }}
-                                >
-                                    清空聊天记录
-                                </button>
-                                <span className="muted">聊天记录保存在本机</span>
-                            </div>
-                            <button className={running ? 'btn stop' : 'btn primary'} onClick={toggle}>
-                                {running ? '停止' : '启动'}
-                            </button>
+                        <div className="settings-layout">
+                            <nav className="settings-nav">
+                                {SETTINGS_TABS.map((t) => (
+                                    <button
+                                        key={t.key}
+                                        className={'settings-tab' + (settingsTab === t.key ? ' active' : '')}
+                                        onClick={() => setSettingsTab(t.key)}
+                                    >
+                                        <span className="tab-ico">{t.icon}</span>
+                                        {t.label}
+                                    </button>
+                                ))}
+                            </nav>
+                            <div className="settings-content">
+                                {settingsTab === 'profile' && (
+                                    <section className="pane">
+                                        <h4>个人资料</h4>
+                                        <label className="field">
+                                            <span>昵称</span>
+                                            <input
+                                                value={name}
+                                                onChange={(e) => setName(e.target.value)}
+                                                onBlur={applyName}
+                                                onKeyDown={(e) => {
+                                                    if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+                                                }}
+                                            />
+                                        </label>
+                                        <div className="field row">
+                                            <Avatar src={myAvatar} name={name} size={44} />
+                                            <button className="btn" onClick={() => setShowAvatars(true)}>更换头像</button>
+                                        </div>
+                                        <p className="hint">修改昵称会自动广播给局域网内其他人；其他人的头像默认随机生成。</p>
+                                    </section>
+                                )}
 
-                            <div className="divider">发现用户</div>
-                            <div className="inline">
-                                <input value={scanTarget} onChange={(e) => setScanTarget(e.target.value)} placeholder="扫描网段 如 172.17.32. 或 /24" disabled={!running} />
-                                <button className="btn" onClick={doScan} disabled={!running}>扫描</button>
-                            </div>
-                            <div className="inline">
-                                <input value={peerIp} onChange={(e) => setPeerIp(e.target.value)} placeholder="单机直连 IP" disabled={!running} />
-                                <button className="btn" onClick={addPeer} disabled={!running || !peerIp.trim()}>直连</button>
+                                {settingsTab === 'files' && (
+                                    <section className="pane">
+                                        <h4>文件</h4>
+                                        <label className="field">
+                                            <span>接收目录（下次启动生效）</span>
+                                            <input
+                                                value={downloadDir}
+                                                onChange={(e) => {
+                                                    setDownloadDir(e.target.value);
+                                                    persist(name, e.target.value, autoReceive, myAvatar, trayMode);
+                                                }}
+                                            />
+                                        </label>
+                                        <label className="field row">
+                                            <input
+                                                type="checkbox"
+                                                checked={autoReceive}
+                                                onChange={(e) => {
+                                                    setAutoReceive(e.target.checked);
+                                                    persist(name, downloadDir, e.target.checked, myAvatar, trayMode);
+                                                }}
+                                            />
+                                            <span>自动接收文件</span>
+                                        </label>
+
+                                        <div className="divider">聊天记录</div>
+                                        <div className="field row">
+                                            <button
+                                                className="btn"
+                                                onClick={() => {
+                                                    setConvs({});
+                                                    ClearHistory().catch(() => undefined);
+                                                }}
+                                            >
+                                                清空聊天记录
+                                            </button>
+                                            <span className="muted">保存在本机</span>
+                                        </div>
+                                    </section>
+                                )}
+
+                                {settingsTab === 'network' && (
+                                    <>
+                                        <section className="pane">
+                                            <h4>发现用户</h4>
+                                            <div className="inline">
+                                                <input
+                                                    value={scanTarget}
+                                                    onChange={(e) => setScanTarget(e.target.value)}
+                                                    placeholder="扫描网段 如 172.17.32. 或 /24"
+                                                    disabled={!running}
+                                                />
+                                                <button className="btn" onClick={doScan} disabled={!running}>扫描</button>
+                                            </div>
+                                            <div className="inline">
+                                                <input
+                                                    value={peerIp}
+                                                    onChange={(e) => setPeerIp(e.target.value)}
+                                                    placeholder="单机直连 IP"
+                                                    disabled={!running}
+                                                />
+                                                <button className="btn" onClick={addPeer} disabled={!running || !peerIp.trim()}>直连</button>
+                                            </div>
+                                            <p className="hint">同一 VLAN 会自动发现；跨网段时用扫描或直连。</p>
+                                        </section>
+
+                                        <section className="pane">
+                                            <h4>夜间断网</h4>
+                                            <label className="field row">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={nightOffEnabled}
+                                                    onChange={(e) => {
+                                                        setNightOffEnabled(e.target.checked);
+                                                        saveCfg({nightOffEnabled: e.target.checked});
+                                                    }}
+                                                />
+                                                <span>启用（到点自动禁用网卡，次日恢复）</span>
+                                            </label>
+                                            <label className="field">
+                                                <span>网卡</span>
+                                                <select
+                                                    className="select"
+                                                    value={nightOffAdapter}
+                                                    onChange={(e) => {
+                                                        setNightOffAdapter(e.target.value);
+                                                        saveCfg({nightOffAdapter: e.target.value});
+                                                    }}
+                                                >
+                                                    <option value="">请选择网卡</option>
+                                                    {adapters.map((ad) => (
+                                                        <option key={ad.index} value={String(ad.index)}>
+                                                            {ad.name} — {ad.desc}（{ad.status}）
+                                                        </option>
+                                                    ))}
+                                                </select>
+                                            </label>
+                                            <div className="inline">
+                                                <label className="field" style={{flex: 1}}>
+                                                    <span>断网时间</span>
+                                                    <input
+                                                        type="time"
+                                                        value={nightOffStart}
+                                                        onChange={(e) => {
+                                                            setNightOffStart(e.target.value);
+                                                            saveCfg({nightOffStart: e.target.value});
+                                                        }}
+                                                    />
+                                                </label>
+                                                <label className="field" style={{flex: 1}}>
+                                                    <span>恢复时间</span>
+                                                    <input
+                                                        type="time"
+                                                        value={nightOffEnd}
+                                                        onChange={(e) => {
+                                                            setNightOffEnd(e.target.value);
+                                                            saveCfg({nightOffEnd: e.target.value});
+                                                        }}
+                                                    />
+                                                </label>
+                                            </div>
+                                            <div className="inline">
+                                                <button className="btn primary" disabled={nightOffBusy || !nightOffAdapter} onClick={applyNightOff}>
+                                                    {nightOffBusy ? '处理中…' : nightOffInstalled ? '更新定时任务' : '应用（需要管理员）'}
+                                                </button>
+                                                <button className="btn" disabled={nightOffBusy || !nightOffInstalled} onClick={removeNightOff}>
+                                                    取消定时任务
+                                                </button>
+                                            </div>
+                                            <div className="inline">
+                                                <button className="btn" disabled={nightOffBusy || !nightOffAdapter} onClick={() => nightOffNow(false)}>
+                                                    立即断网
+                                                </button>
+                                                <button className="btn" disabled={nightOffBusy || !nightOffAdapter} onClick={() => nightOffNow(true)}>
+                                                    立即恢复
+                                                </button>
+                                                <span className="muted" style={{alignSelf: 'center'}}>测试用，会弹 UAC</span>
+                                            </div>
+                                            <p className="hint">
+                                                {nightOffInstalled
+                                                    ? `已生效：每天 ${nightOffStart} 禁用「${nightOffAdapterName}」，${nightOffEnd} 恢复（由 Windows 计划任务执行，FlyDog 关闭也会生效）`
+                                                    : '未安装。点「应用」会弹出 UAC，请允许管理员权限。'}
+                                            </p>
+                                            <p className="hint">
+                                                {lastRuns.disableTime || lastRuns.enableTime
+                                                    ? `最近执行：断网 ${lastRuns.disableTime || '—'} → ${lastRuns.disableStatus || '—'}　｜　恢复 ${lastRuns.enableTime || '—'} → ${lastRuns.enableStatus || '—'}`
+                                                    : '最近没有执行记录'}
+                                            </p>
+                                        </section>
+                                    </>
+                                )}
+
+                                {settingsTab === 'system' && (
+                                    <section className="pane">
+                                        <h4>启动与运行</h4>
+                                        <label className="field row">
+                                            <input
+                                                type="checkbox"
+                                                checked={trayMode}
+                                                onChange={(e) => {
+                                                    setTrayMode(e.target.checked);
+                                                    persist(name, downloadDir, autoReceive, myAvatar, e.target.checked);
+                                                }}
+                                            />
+                                            <span>关闭窗口时最小化到托盘（右键托盘图标可退出）</span>
+                                        </label>
+                                        <label className="field row">
+                                            <input
+                                                type="checkbox"
+                                                checked={autostart}
+                                                onChange={(e) => {
+                                                    const v = e.target.checked;
+                                                    setAutostart(v);
+                                                    SetAutostart(v).catch((err: any) => {
+                                                        setAutostart(!v);
+                                                        setError(String(err));
+                                                    });
+                                                }}
+                                            />
+                                            <span>开机自动启动（启动后留在托盘）</span>
+                                        </label>
+
+                                        <div className="divider">服务状态</div>
+                                        <div className="field row">
+                                            <span className={running ? 'dot on' : 'dot'} />
+                                            <span>{running ? '正在运行' : '已停止'}</span>
+                                            <button className={running ? 'btn stop' : 'btn primary'} onClick={toggle}>
+                                                {running ? '停止' : '启动'}
+                                            </button>
+                                        </div>
+                                    </section>
+                                )}
                             </div>
                         </div>
                     </div>

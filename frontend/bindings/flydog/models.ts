@@ -22,6 +22,26 @@ export interface HistoryMsg {
 }
 
 /**
+ * NetAdapter 是给前端展示的网卡信息。
+ */
+export interface NetAdapter {
+    "index": number;
+    "name": string;
+    "desc": string;
+    "status": string;
+}
+
+/**
+ * NightOffRuns 是最近一次断网 / 恢复的执行记录（来自 nightoff.log）。
+ */
+export interface NightOffRuns {
+    "disableTime": string;
+    "disableStatus": string;
+    "enableTime": string;
+    "enableStatus": string;
+}
+
+/**
  * UserConfig is persisted to disk so settings survive restarts.
  */
 export interface UserConfig {
@@ -30,4 +50,12 @@ export interface UserConfig {
     "autoReceive": boolean;
     "avatar": string;
     "minimizeToTray": boolean;
+
+    /**
+     * Night off (scheduled network adapter disable)
+     */
+    "nightOffEnabled": boolean;
+    "nightOffAdapter": string;
+    "nightOffStart": string;
+    "nightOffEnd": string;
 }

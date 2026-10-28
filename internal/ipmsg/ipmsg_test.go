@@ -9,6 +9,48 @@ import (
 	"testing"
 )
 
+func TestParseEntryExtra(t *testing.T) {
+	gbkName := encodeText("张三", false)
+	gbkGroup := encodeText("研发部", false)
+
+	cases := []struct {
+		name      string
+		extra     []byte
+		wantName  string
+		wantGroup string
+	}{
+		{
+			name:     "name only",
+			extra:    append(append([]byte{}, gbkName...), 0),
+			wantName: "张三",
+		},
+		{
+			name:      "name and group",
+			extra:     append(append(append(append([]byte{}, gbkName...), 0), gbkGroup...), 0),
+			wantName:  "张三",
+			wantGroup: "研发部",
+		},
+		{
+			name:      "utf8 extension block",
+			extra:     []byte("Alice\x00Group\x00\nUN:alice\nHN:pc\nNN:AliceNick\nGN:G2\n"),
+			wantName:  "AliceNick",
+			wantGroup: "G2",
+		},
+		{
+			name:     "empty",
+			extra:    nil,
+			wantName: "",
+		},
+	}
+
+	for _, tc := range cases {
+		gotName, gotGroup := parseEntryExtra(tc.extra, false)
+		if gotName != tc.wantName || gotGroup != tc.wantGroup {
+			t.Errorf("%s: got (%q, %q), want (%q, %q)", tc.name, gotName, gotGroup, tc.wantName, tc.wantGroup)
+		}
+	}
+}
+
 func TestPacketRoundTrip(t *testing.T) {
 	extra := []byte("hello\x00world\x07tail")
 	p := &Packet{

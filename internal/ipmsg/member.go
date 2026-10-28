@@ -9,6 +9,7 @@ import (
 // Member is a discovered peer on the LAN.
 type Member struct {
 	Name     string    `json:"name"`
+	Group    string    `json:"group"`
 	Host     string    `json:"host"`
 	IP       string    `json:"ip"`
 	Port     int       `json:"port"`
@@ -65,8 +66,9 @@ func (t *MemberTable) Upsert(m Member) (Member, bool) {
 		t.m[k] = &cp
 		return cp, true
 	}
-	changed := cur.Name != m.Name || cur.Host != m.Host || cur.Absence != m.Absence || cur.UTF8 != m.UTF8
+	changed := cur.Name != m.Name || cur.Host != m.Host || cur.Absence != m.Absence || cur.UTF8 != m.UTF8 || cur.Group != m.Group
 	cur.Name = m.Name
+	cur.Group = m.Group
 	cur.Host = m.Host
 	cur.Absence = m.Absence
 	cur.UTF8 = m.UTF8

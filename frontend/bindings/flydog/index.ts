@@ -8,5 +8,7 @@ export {
 
 export type {
     HistoryMsg,
+    NetAdapter,
+    NightOffRuns,
     UserConfig
 } from "./models.js";

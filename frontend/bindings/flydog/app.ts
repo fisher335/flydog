@@ -33,6 +33,13 @@ export function ClearHistory(): $CancellablePromise<void> {
 }
 
 /**
+ * GetAutostart reports whether FlyDog is registered to launch at login.
+ */
+export function GetAutostart(): $CancellablePromise<boolean> {
+    return $Call.ByID(2754093072);
+}
+
+/**
  * GetMembers returns the current peer list.
  */
 export function GetMembers(): $CancellablePromise<ipmsg$0.Member[] | null> {
@@ -40,10 +47,24 @@ export function GetMembers(): $CancellablePromise<ipmsg$0.Member[] | null> {
 }
 
 /**
+ * InstallNightOff 注册（或更新）两条计划任务：start 禁用网卡，end 恢复网卡。
+ */
+export function InstallNightOff(index: number, start: string, end: string): $CancellablePromise<void> {
+    return $Call.ByID(1075978587, index, start, end);
+}
+
+/**
  * IsRunning reports whether the engine is active.
  */
 export function IsRunning(): $CancellablePromise<boolean> {
     return $Call.ByID(1670839396);
+}
+
+/**
+ * ListAdapters 列出网卡（含 InterfaceIndex）。
+ */
+export function ListAdapters(): $CancellablePromise<$models.NetAdapter[] | null> {
+    return $Call.ByID(1630840017);
 }
 
 /**
@@ -65,6 +86,27 @@ export function LoadHistory(): $CancellablePromise<$models.HistoryMsg[] | null> 
  */
 export function LogPath(): $CancellablePromise<string> {
     return $Call.ByID(3838167666);
+}
+
+/**
+ * NightOffLastRuns 从日志中解析最近一次断网与恢复的时间和结果。
+ */
+export function NightOffLastRuns(): $CancellablePromise<$models.NightOffRuns> {
+    return $Call.ByID(2434685616);
+}
+
+/**
+ * NightOffNow 立即禁用/恢复网卡（会弹一次 UAC），并校验实际结果。
+ */
+export function NightOffNow(index: number, enable: boolean): $CancellablePromise<void> {
+    return $Call.ByID(410001790, index, enable);
+}
+
+/**
+ * NightOffStatus 报告计划任务是否已注册。
+ */
+export function NightOffStatus(): $CancellablePromise<boolean> {
+    return $Call.ByID(1907689584);
 }
 
 /**
@@ -93,6 +135,13 @@ export function PickFiles(): $CancellablePromise<string[] | null> {
  */
 export function PickFolder(): $CancellablePromise<string> {
     return $Call.ByID(1618095492);
+}
+
+/**
+ * RemoveNightOff 删除计划任务。
+ */
+export function RemoveNightOff(): $CancellablePromise<void> {
+    return $Call.ByID(2614066758);
 }
 
 /**
@@ -149,6 +198,14 @@ export function SendText(ip: string, port: number, text: string): $CancellablePr
  */
 export function SendTyping(ip: string, port: number, typing: boolean): $CancellablePromise<void> {
     return $Call.ByID(892939144, ip, port, typing);
+}
+
+/**
+ * SetAutostart registers or removes the login-launch entry. When enabled the
+ * app starts hidden in the system tray.
+ */
+export function SetAutostart(enabled: boolean): $CancellablePromise<void> {
+    return $Call.ByID(1324798748, enabled);
 }
 
 /**

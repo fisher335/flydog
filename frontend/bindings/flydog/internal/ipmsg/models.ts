@@ -18,6 +18,7 @@ export interface FileInfo {
  */
 export interface Member {
     "name": string;
+    "group": string;
     "host": string;
     "ip": string;
     "port": number;

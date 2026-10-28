@@ -25,7 +25,14 @@ func freePort(t *testing.T) int {
 func startTestEngine(t *testing.T, port int) *Engine {
 	t.Helper()
 	dir := t.TempDir()
-	e := New(Config{Name: "tester", Host: "host", Port: port, DownloadDir: dir, AutoReceive: true}, Callbacks{})
+	e := New(Config{
+		Name:        "tester",
+		Host:        "host",
+		Port:        port,
+		TCPPort:     freePort(t),
+		DownloadDir: dir,
+		AutoReceive: true,
+	}, Callbacks{})
 	if err := e.Start(); err != nil {
 		t.Fatalf("start: %v", err)
 	}
