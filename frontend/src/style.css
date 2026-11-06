@@ -6,11 +6,11 @@
 }
 
 html {
-    background: #eef1f7;
+    background: #eef1f5;
 }
 
 html[data-theme='dark'] {
-    background: #0e131f;
+    background: #0d1320;
 }
 
 body {

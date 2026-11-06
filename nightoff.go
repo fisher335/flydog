@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // 夜间断网：用 Windows 计划任务在指定时间禁用/恢复网卡。
@@ -17,8 +18,13 @@ import (
 // 跨进程传递容易因编码问题变成乱码。
 
 const (
-	nightOffDisableTask = "FlyDog-NightOff-Disable"
-	nightOffEnableTask  = "FlyDog-NightOff-Enable"
+	nightOffDisableTask = "NeiWangTong-NightOff-Disable"
+	nightOffEnableTask  = "NeiWangTong-NightOff-Enable"
+
+	// 旧版 FlyDog 注册的任务名。重新应用计划时一并删除；在用户重新
+	// 应用之前，它们仍被视为“已安装”，避免升级后显示成未启用。
+	legacyNightOffDisableTask = "FlyDog-NightOff-Disable"
+	legacyNightOffEnableTask  = "FlyDog-NightOff-Enable"
 )
 
 // NetAdapter 是给前端展示的网卡信息。
@@ -47,10 +53,16 @@ func runPowerShell(script string) (string, error) {
 }
 
 // runElevated runs a .ps1 file elevated and waits for it to finish.
+//
+// -ArgumentList is passed as one string with embedded double quotes: when an
+// array is used, Start-Process joins the elements with spaces without quoting
+// them, so a script path containing spaces (e.g. "C:\Users\John Doe\...")
+// would be split apart.
 func runElevated(scriptPath string) error {
+	args := "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"" + scriptPath + "\""
 	inner := fmt.Sprintf(
-		"Start-Process -FilePath 'powershell.exe' -Verb RunAs -Wait -WindowStyle Hidden -ArgumentList @('-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',%s)",
-		quotePS(scriptPath),
+		"Start-Process -FilePath 'powershell.exe' -Verb RunAs -Wait -WindowStyle Hidden -ArgumentList %s",
+		quotePS(args),
 	)
 	_, err := runPowerShell(inner)
 	return err
@@ -91,7 +103,7 @@ func writeNightOffScript() error {
 		return err
 	}
 	script := `param([string]$Action, [int]$Index)
-$log = '` + nightOffLogPath() + `'
+$log = ` + quotePS(nightOffLogPath()) + `
 function Log($m) { Add-Content -Path $log -Value ("{0}  {1}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $m) -Encoding UTF8 }
 $ad = Get-NetAdapter -InterfaceIndex $Index -ErrorAction SilentlyContinue
 if (-not $ad) { Log "adapter index=$Index not found"; exit 1 }
@@ -120,8 +132,12 @@ func (a *App) InstallNightOff(index int, start, end string) error {
 	if index <= 0 {
 		return errors.New("请先选择网卡")
 	}
-	if !isHHMM(start) || !isHHMM(end) {
-		return errors.New("时间格式应为 HH:mm")
+	var ok bool
+	if start, ok = normalizeHHMM(start); !ok {
+		return errors.New("断网时间格式应为 HH:mm")
+	}
+	if end, ok = normalizeHHMM(end); !ok {
+		return errors.New("恢复时间格式应为 HH:mm")
 	}
 	if err := writeNightOffScript(); err != nil {
 		return err
@@ -132,6 +148,8 @@ func (a *App) InstallNightOff(index int, start, end string) error {
 try {
     $ps1 = %s
     $idx = %d
+    Unregister-ScheduledTask -TaskName '%s' -Confirm:$false -ErrorAction SilentlyContinue
+    Unregister-ScheduledTask -TaskName '%s' -Confirm:$false -ErrorAction SilentlyContinue
     Unregister-ScheduledTask -TaskName '%s' -Confirm:$false -ErrorAction SilentlyContinue
     Unregister-ScheduledTask -TaskName '%s' -Confirm:$false -ErrorAction SilentlyContinue
     $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Highest
@@ -151,6 +169,7 @@ try {
 `,
 		quotePS(nightOffScriptPath()), index,
 		nightOffDisableTask, nightOffEnableTask,
+		legacyNightOffDisableTask, legacyNightOffEnableTask,
 		start, end,
 		nightOffDisableTask, nightOffEnableTask,
 		quotePS(nightOffResultPath()), quotePS(nightOffResultPath()),
@@ -175,8 +194,12 @@ func (a *App) RemoveNightOff() error {
 	script := fmt.Sprintf(`$ErrorActionPreference = 'SilentlyContinue'
 Unregister-ScheduledTask -TaskName '%s' -Confirm:$false -ErrorAction SilentlyContinue
 Unregister-ScheduledTask -TaskName '%s' -Confirm:$false -ErrorAction SilentlyContinue
+Unregister-ScheduledTask -TaskName '%s' -Confirm:$false -ErrorAction SilentlyContinue
+Unregister-ScheduledTask -TaskName '%s' -Confirm:$false -ErrorAction SilentlyContinue
 'OK' | Set-Content -Path %s -Encoding UTF8
-`, nightOffDisableTask, nightOffEnableTask, quotePS(nightOffResultPath()))
+`, nightOffDisableTask, nightOffEnableTask,
+		legacyNightOffDisableTask, legacyNightOffEnableTask,
+		quotePS(nightOffResultPath()))
 	p := filepath.Join(nightOffDir(), "nightoff-remove.ps1")
 	if err := os.MkdirAll(nightOffDir(), 0o755); err != nil {
 		return err
@@ -190,9 +213,13 @@ Unregister-ScheduledTask -TaskName '%s' -Confirm:$false -ErrorAction SilentlyCon
 	return readNightOffResult()
 }
 
-// NightOffStatus 报告计划任务是否已注册。
+// NightOffStatus 报告计划任务是否已注册（兼容旧版 FlyDog 任务名）。
 func (a *App) NightOffStatus() bool {
-	cmd := exec.Command("schtasks", "/Query", "/TN", nightOffDisableTask)
+	return nightOffTaskExists(nightOffDisableTask) || nightOffTaskExists(legacyNightOffDisableTask)
+}
+
+func nightOffTaskExists(name string) bool {
+	cmd := exec.Command("schtasks", "/Query", "/TN", name)
 	hideWindow(cmd)
 	return cmd.Run() == nil
 }
@@ -207,12 +234,20 @@ type NightOffRuns struct {
 
 // NightOffLastRuns 从日志中解析最近一次断网与恢复的时间和结果。
 func (a *App) NightOffLastRuns() NightOffRuns {
+	r := parseNightOffLog(nightOffLogPath())
+	// 旧版任务会继续写入旧目录的日志，直到用户重新应用计划；合并新旧
+	// 日志，升级后的执行记录不会看起来“消失”。
+	legacy := parseNightOffLog(filepath.Join(legacyConfigDir(), "nightoff.log"))
+	return mergeNightOffRuns(r, legacy)
+}
+
+func parseNightOffLog(path string) NightOffRuns {
 	var r NightOffRuns
-	b, err := os.ReadFile(nightOffLogPath())
+	b, err := os.ReadFile(path)
 	if err != nil {
 		return r
 	}
-	for _, line := range strings.Split(string(b), "\n") {
+	for _, line := range strings.Split(strings.TrimPrefix(string(b), "\ufeff"), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
@@ -234,6 +269,18 @@ func (a *App) NightOffLastRuns() NightOffRuns {
 		}
 	}
 	return r
+}
+
+// mergeNightOffRuns keeps the newer of each timestamp (the log format sorts
+// lexicographically).
+func mergeNightOffRuns(a, b NightOffRuns) NightOffRuns {
+	if b.DisableTime > a.DisableTime {
+		a.DisableTime, a.DisableStatus = b.DisableTime, b.DisableStatus
+	}
+	if b.EnableTime > a.EnableTime {
+		a.EnableTime, a.EnableStatus = b.EnableTime, b.EnableStatus
+	}
+	return a
 }
 
 // NightOffNow 立即禁用/恢复网卡（会弹一次 UAC），并校验实际结果。
@@ -292,17 +339,31 @@ func readNightOffResult() error {
 	if err != nil {
 		return errors.New("未收到执行结果（可能取消了管理员授权）")
 	}
-	s := strings.TrimSpace(string(b))
+	return parseNightOffResult(b)
+}
+
+// parseNightOffResult interprets the result file written by the elevated
+// script. Windows PowerShell 5.1 writes Set-Content -Encoding UTF8 with a BOM,
+// so strip it before looking at the payload (strings.TrimSpace does not remove
+// U+FEFF).
+func parseNightOffResult(b []byte) error {
+	s := strings.TrimSpace(strings.TrimPrefix(string(b), "\ufeff"))
 	if strings.HasPrefix(s, "OK") {
 		return nil
 	}
-	return errors.New(strings.TrimPrefix(s, "\ufeff"))
+	msg := strings.TrimSpace(strings.TrimPrefix(s, "ERROR:"))
+	if msg == "" {
+		msg = "\u591c\u95f4\u65ad\u7f51\u64cd\u4f5c\u5931\u8d25"
+	}
+	return errors.New(msg)
 }
 
-func isHHMM(s string) bool {
-	var h, m int
-	if _, err := fmt.Sscanf(s, "%d:%d", &h, &m); err != nil {
-		return false
+// normalizeHHMM validates a HH:mm string and returns its canonical form.
+// time.Parse rejects trailing garbage ("10:30abc") that fmt.Sscanf accepts.
+func normalizeHHMM(s string) (string, bool) {
+	t, err := time.Parse("15:04", strings.TrimSpace(s))
+	if err != nil {
+		return "", false
 	}
-	return h >= 0 && h < 24 && m >= 0 && m < 60
+	return t.Format("15:04"), true
 }

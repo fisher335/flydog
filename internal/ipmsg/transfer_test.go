@@ -114,6 +114,74 @@ func TestServeDirFiles(t *testing.T) {
 	}
 }
 
+// TestServeFileDataSplitRequest verifies that a request delivered in two TCP
+// segments is still parsed (a single Read used to silently drop such requests).
+func TestServeFileDataSplitRequest(t *testing.T) {
+	port := freePort(t)
+	e := startTestEngine(t, port)
+
+	src := filepath.Join(t.TempDir(), "split.txt")
+	content := []byte("split request payload")
+	if err := os.WriteFile(src, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	packetNo, fileID := uint32(9), uint32(10)
+	e.mu.Lock()
+	e.outgoing[outKey(packetNo, fileID)] = &outgoing{
+		path: src,
+		info: FileInfo{ID: fileID, Name: "split.txt", Size: uint64(len(content)), Attr: FileRegular},
+	}
+	e.mu.Unlock()
+
+	extra := fmt.Sprintf("%x:%x:%x", packetNo, fileID, 0)
+	req := (&Packet{
+		Version: Version, PacketNo: 1, Name: "peer", Host: "peerhost",
+		Command: CmdGetFileData, Extra: []byte(extra),
+	}).Encode()
+
+	conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 3*time.Second)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+	half := len(req) / 3
+	if _, err := conn.Write(req[:half]); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if _, err := conn.Write(req[half:]); err != nil {
+		t.Fatal(err)
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	got, err := io.ReadAll(conn)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if !bytes.Equal(got, content) {
+		t.Fatalf("payload mismatch: got %q want %q", got, content)
+	}
+}
+
+func TestCreateUnique(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "photo.jpg")
+	var names []string
+	for i := 0; i < 3; i++ {
+		f, err := createUnique(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		names = append(names, filepath.Base(f.Name()))
+		f.Close()
+	}
+	want := []string{"photo.jpg", "photo (1).jpg", "photo (2).jpg"}
+	for i := range want {
+		if names[i] != want[i] {
+			t.Fatalf("name %d = %q, want %q", i, names[i], want[i])
+		}
+	}
+}
+
 // request opens a TCP connection to the engine, sends a file request and
 // returns everything the server writes back.
 func request(t *testing.T, port int, cmd int, packetNo, fileID uint32, offset uint64) []byte {

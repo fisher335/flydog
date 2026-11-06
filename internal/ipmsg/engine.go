@@ -73,11 +73,12 @@ type Callbacks struct {
 }
 
 type outgoing struct {
-	path   string
-	info   FileInfo
-	isDir  bool
-	remote string
-	utf8   bool
+	path    string
+	info    FileInfo
+	isDir   bool
+	remote  string
+	utf8    bool
+	created time.Time
 }
 
 // Engine implements the IPMSG UDP discovery/messaging and TCP file transfer.
@@ -105,6 +106,11 @@ type Engine struct {
 	progMu   sync.Mutex
 	progLast map[string]time.Time
 
+	// pendingText merges a peer's one-packet-per-line multi-line message into
+	// one chat message (see coalesce.go).
+	pendMu  sync.Mutex
+	pending map[string]*pendingText
+
 	localIPs map[string]bool
 
 	quit    chan struct{}
@@ -121,7 +127,7 @@ func New(cfg Config, cb Callbacks) *Engine {
 		cfg.TCPPort = 2426
 	}
 	if cfg.Name == "" {
-		cfg.Name = "flydog"
+		cfg.Name = "neiwangtong"
 	}
 	if cfg.Host == "" {
 		cfg.Host, _ = os.Hostname()
@@ -132,6 +138,7 @@ func New(cfg Config, cb Callbacks) *Engine {
 		members:  newMemberTable(),
 		outgoing: make(map[string]*outgoing),
 		progLast: make(map[string]time.Time),
+		pending:  make(map[string]*pendingText),
 		peers:    make(map[string]*peerConn),
 		quit:     make(chan struct{}),
 	}
@@ -223,6 +230,7 @@ func (e *Engine) Stop() {
 		return
 	}
 	e.broadcast(CmdBrExit, encodeText(e.Name(), false), false)
+	e.flushAllPending()
 	time.Sleep(60 * time.Millisecond)
 	close(e.quit)
 	if e.udp != nil {
@@ -236,6 +244,9 @@ func (e *Engine) Stop() {
 		e.tcpLn.Close()
 	}
 	e.wg.Wait()
+	e.mu.Lock()
+	e.outgoing = make(map[string]*outgoing)
+	e.mu.Unlock()
 }
 
 func (e *Engine) nextPacketNo() uint32 { return atomic.AddUint32(&e.packetNo, 1) }
@@ -392,7 +403,7 @@ func (e *Engine) handleFrom(pkt *Packet, ip string, port int) {
 		}
 		return
 	case CmdGetInfo:
-		_ = e.send(ip, port, CmdSendInfo, []byte("FlyDog ver 1.0"), pkt.UTF8, 0)
+		_ = e.send(ip, port, CmdSendInfo, encodeText("内网通 ver 1.0", pkt.UTF8), pkt.UTF8, 0)
 		return
 	}
 
@@ -409,8 +420,15 @@ func (e *Engine) handleFrom(pkt *Packet, ip string, port int) {
 		}
 		text, files := decodeAttachment(pkt.Extra, pkt.UTF8)
 		text, format := splitTextFormat(text)
+		if len(files) == 0 {
+			// A multi-line paste arriving as one packet per line is put back
+			// together here instead of showing up as many messages.
+			e.queueText(peer, text, format)
+			return
+		}
+		e.flushPeer(ip, port)
 		e.emit(Message{Peer: peer, Kind: "text", Text: text, Format: format, Files: files, Time: time.Now()})
-		if e.cfg.AutoReceive && len(files) > 0 {
+		if e.cfg.AutoReceive {
 			e.receiveFiles(peer, pkt.PacketNo, files, pkt.UTF8)
 		}
 	case CmdKnock:
@@ -435,14 +453,52 @@ func (e *Engine) emit(m Message) {
 }
 
 // splitTextFormat splits a 飞秋 text body of the form "text{font-format}".
+//
+// The suffix is only stripped when it actually looks like 飞秋's format string.
+// Treating any trailing "{...}" as formatting used to eat real message text
+// such as "看这个数组 {1,2}".
 func splitTextFormat(s string) (string, string) {
 	if len(s) < 3 || s[len(s)-1] != '}' {
 		return s, ""
 	}
-	if i := strings.IndexByte(s, '{'); i >= 0 && i < len(s)-1 {
-		return s[:i], s[i+1 : len(s)-1]
+	i := strings.IndexByte(s, '{')
+	if i < 0 || i >= len(s)-1 {
+		return s, ""
 	}
-	return s, ""
+	format := s[i+1 : len(s)-1]
+	if !looksLikeTextFormat(format) {
+		return s, ""
+	}
+	return s[:i], format
+}
+
+// looksLikeTextFormat reports whether f is plausibly 飞秋's format suffix:
+// a short, single-line, semicolon-separated list with at least one numeric
+// field (font size / colour / style flags).
+func looksLikeTextFormat(f string) bool {
+	if f == "" || len(f) > 64 || strings.ContainsAny(f, "\r\n") {
+		return false
+	}
+	fields := strings.Split(f, ";")
+	if len(fields) < 2 {
+		return false
+	}
+	numeric := false
+	for i, field := range fields {
+		field = strings.TrimSpace(field)
+		if field == "" || len(field) > 20 {
+			return false
+		}
+		// The first field is the font name and may contain spaces
+		// ("Microsoft YaHei"); the rest are flags/numbers.
+		if i > 0 && strings.ContainsAny(field, " \t") {
+			return false
+		}
+		if _, err := strconv.Atoi(field); err == nil {
+			numeric = true
+		}
+	}
+	return numeric
 }
 
 func (e *Engine) reply(addr *net.UDPAddr, cmd int, extra []byte, utf8Mode bool, packetNo uint32) {
@@ -531,6 +587,9 @@ func (e *Engine) expireLoop() {
 			if n := e.members.Expire(90 * time.Second); n > 0 {
 				e.notifyMembers()
 			}
+			// Files stay shareable for an hour after they were offered; after
+			// that the entry is stale and would otherwise be kept forever.
+			e.purgeOutgoing(time.Hour)
 		}
 	}
 }

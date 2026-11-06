@@ -12,7 +12,7 @@ import (
 // The TCP peer channel carries the very same IPMSG packets as UDP, framed with a
 // 4-byte big-endian length prefix. It exists because some corporate networks
 // allow TCP between VLANs but drop UDP (so broadcast discovery fails), while TCP
-// still works. It interoperates flydog<->flydog only; real 飞秋/飞鸽 clients only
+// still works. It interoperates 内网通<->内网通 only; real 飞秋/飞鸽 clients only
 // speak UDP 2425.
 
 type peerConn struct {
@@ -23,6 +23,10 @@ type peerConn struct {
 func (p *peerConn) writeFrame(data []byte) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	// A half-open peer would otherwise block this goroutine forever. The
+	// engine's public send methods hold the app-wide mutex, so a stuck write
+	// would freeze the whole UI.
+	_ = p.conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
 	var hdr [4]byte
 	binary.BigEndian.PutUint32(hdr[:], uint32(len(data)))
 	if _, err := p.conn.Write(hdr[:]); err != nil {
@@ -116,7 +120,13 @@ func (e *Engine) dialTCPPeerPort(ip string, port int) bool {
 	}
 	e.logf("TCP 对等连接建立(出站): %s", ip)
 	e.sendOnPeer(ip, CmdBrEntry|OptFileAttach, encodeText(e.Name(), e.cfg.AdvertiseUTF8), e.cfg.AdvertiseUTF8)
-	go e.readPeer(ip, conn)
+	go func() {
+		// Mirrors servePeer: the reader owns the connection, so when it exits
+		// (peer closed or I/O error) the peer entry must be dropped and the
+		// socket closed, or the stale entry would stay in e.peers forever.
+		defer e.dropPeer(ip, conn)
+		e.readPeer(ip, conn)
+	}()
 	return true
 }
 
@@ -136,7 +146,9 @@ func (e *Engine) sendOnPeer(ip string, cmd int, extra []byte, utf8Mode bool) {
 		Extra:      extra,
 		UTF8:       utf8Mode,
 	}
-	_ = pc.writeFrame(p.Encode())
+	if err := pc.writeFrame(p.Encode()); err != nil {
+		e.dropPeer(ip, pc.conn)
+	}
 }
 
 // sendViaTCP reports whether data was delivered over a TCP peer channel.

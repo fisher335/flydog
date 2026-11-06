@@ -5,11 +5,11 @@
 	"info": {
 		"0409": {
 			"ProductVersion": "0.1.0",
-			"CompanyName": "My Company",
-			"FileDescription": "A flydog application",
-			"LegalCopyright": "© 2026, My Company",
-			"ProductName": "My Product",
-			"Comments": "This is a comment"
+			"CompanyName": "内网通",
+			"FileDescription": "局域网通讯与文件传输",
+			"LegalCopyright": "© 2026, 内网通",
+			"ProductName": "内网通",
+			"Comments": "基于 IPMSG 协议的局域网通讯工具"
 		}
 	}
 }

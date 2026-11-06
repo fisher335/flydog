@@ -4,6 +4,9 @@ frontend/dist
 frontend/node_modules
 /.idea/
 /flydog.exe
+/neiwangtong.exe
+build/android/.gradle
+build/android/build
 *.syso
 build/linux/appimage/build
 build/windows/nsis/MicrosoftEdgeWebview2Setup.exe

@@ -1,7 +1,7 @@
 @echo off
 setlocal
 chcp 65001 >nul
-title FlyDog 打包 (Wails v3)
+title 内网通 打包 (Wails v3)
 
 cd /d "%~dp0"
 
@@ -31,7 +31,7 @@ set "MODE=%~1"
 if "%MODE%"=="" set "MODE=release"
 
 echo ============================================
-echo    FlyDog  [%MODE%]   Wails v3
+echo    内网通  [%MODE%]   Wails v3
 echo    %WAILS%
 echo ============================================
 echo.
@@ -74,7 +74,7 @@ goto end
 :help
 echo 用法:  build.bat [release ^| debug ^| package ^| dev ^| clean]
 echo.
-echo   release   正式单文件 exe (bin\flydog.exe)
+echo   release   正式单文件 exe (bin\neiwangtong.exe)
 echo   debug     调试构建
 echo   package   构建并打包安装程序
 echo   dev       开发模式（前端热重载）

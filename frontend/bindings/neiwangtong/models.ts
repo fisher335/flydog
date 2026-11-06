@@ -42,6 +42,17 @@ export interface NightOffRuns {
 }
 
 /**
+ * ShareInfo describes the current read/write share of a local folder.
+ */
+export interface ShareInfo {
+    "running": boolean;
+    "dir": string;
+    "port": number;
+    "allowUpload": boolean;
+    "urls": string[] | null;
+}
+
+/**
  * UserConfig is persisted to disk so settings survive restarts.
  */
 export interface UserConfig {
@@ -58,4 +69,11 @@ export interface UserConfig {
     "nightOffAdapter": string;
     "nightOffStart": string;
     "nightOffEnd": string;
+
+    /**
+     * Shared folder (HTTP, LAN only)
+     */
+    "shareDir": string;
+    "sharePort": number;
+    "shareAllowUpload": boolean;
 }

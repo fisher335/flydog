@@ -8,15 +8,15 @@
   IgnorableNamespaces="uap3">
   
   <Identity 
-    Name="com.example.flydog"
-    Publisher="CN=My Company"
+    Name="com.neiwangtong.app"
+    Publisher="CN=内网通"
     Version="0.1.0.0" 
     ProcessorArchitecture="x64" />
   
   <Properties>
-    <DisplayName>My Product</DisplayName>
-    <PublisherDisplayName>My Company</PublisherDisplayName>
-    <Description>A flydog application</Description>
+    <DisplayName>内网通</DisplayName>
+    <PublisherDisplayName>内网通</PublisherDisplayName>
+    <Description>局域网通讯与文件传输</Description>
     <Logo>Assets\StoreLogo.png</Logo>
   </Properties>
   
@@ -25,14 +25,14 @@
   </Dependencies>
   
   <Resources>
-    <Resource Language="en-us" />
+    <Resource Language="zh-cn" />
   </Resources>
   
   <Applications>
-    <Application Id="com.example.flydog" Executable="flydog.exe" EntryPoint="Windows.FullTrustApplication">
+    <Application Id="com.neiwangtong.app" Executable="neiwangtong.exe" EntryPoint="Windows.FullTrustApplication">
       <uap:VisualElements
-        DisplayName="My Product"
-        Description="A flydog application"
+        DisplayName="内网通"
+        Description="局域网通讯与文件传输"
         BackgroundColor="transparent"
         Square150x150Logo="Assets\Square150x150Logo.png"
         Square44x44Logo="Assets\Square44x44Logo.png">
@@ -41,7 +41,7 @@
       </uap:VisualElements>
       
       <Extensions>
-        <desktop:Extension Category="windows.fullTrustProcess" Executable="flydog.exe" />
+        <desktop:Extension Category="windows.fullTrustProcess" Executable="neiwangtong.exe" />
         
         
       </Extensions>

@@ -1,13 +1,15 @@
-import {useEffect, useMemo, useRef, useState} from 'react';
+import {Fragment, useEffect, useMemo, useRef, useState, type ReactNode} from 'react';
 import './App.css';
 import {Events} from '@wailsio/runtime';
-import {App as AppSvc} from '../bindings/flydog';
+import {App as AppSvc} from '../bindings/neiwangtong';
 
 const {
     AddPeer,
     ClearHistory,
+    CopyText,
     GetAutostart,
     GetMembers,
+    GetShareInfo,
     InstallNightOff,
     IsRunning,
     ListAdapters,
@@ -17,6 +19,7 @@ const {
     NightOffNow,
     NightOffStatus,
     OpenDownloadDir,
+    OpenURL,
     OpenYou,
     PickFiles,
     PickFolder,
@@ -32,7 +35,9 @@ const {
     SetName,
     SetAutostart,
     Start,
+    StartShare,
     Stop,
+    StopShare,
 } = AppSvc;
 
 // Wails v3 delivers a WailsEvent object; unwrap its `.data` payload.
@@ -50,6 +55,12 @@ interface Member {
     utf8: boolean;
 }
 
+interface Contact extends Member {
+    offline?: boolean;
+    lastText?: string;
+    lastAt?: string;
+}
+
 interface ChatMsg {
     id: number;
     dir: 'in' | 'out';
@@ -57,6 +68,7 @@ interface ChatMsg {
     text: string;
     files: string[];
     time: string;
+    peerName?: string;
 }
 
 interface Transfer {
@@ -70,17 +82,26 @@ interface Transfer {
     error?: string;
 }
 
+interface ShareInfo {
+    running: boolean;
+    dir: string;
+    port: number;
+    allowUpload: boolean;
+    urls: string[];
+}
+
 interface Toast {
     id: number;
     title: string;
     body: string;
 }
 
-const SETTINGS_TABS = [
-    {key: 'profile', icon: '👤', label: '个人'},
-    {key: 'files', icon: '📁', label: '文件与记录'},
-    {key: 'network', icon: '🌐', label: '网络'},
-    {key: 'system', icon: '⚙️', label: '系统'},
+const SETTINGS_TABS: {key: string; icon: IconName; label: string}[] = [
+    {key: 'profile', icon: 'user', label: '个人'},
+    {key: 'files', icon: 'folder', label: '文件与记录'},
+    {key: 'share', icon: 'share', label: '共享'},
+    {key: 'network', icon: 'network', label: '网络'},
+    {key: 'system', icon: 'settings', label: '系统'},
 ];
 
 const EMOJIS = [
@@ -89,6 +110,113 @@ const EMOJIS = [
     '🍀', '☕', '🍺', '🎁', '⭐', '✅', '❌', '⚠️', '😴', '🤝', '🤗', '😇',
     '🥳', '😢', '😅', '🙄', '🚀', '🐶', '📎', '📁', '🖥️', '📱', '⏰', '🎵',
 ];
+
+type IconName =
+    | 'power'
+    | 'sun'
+    | 'moon'
+    | 'settings'
+    | 'refresh'
+    | 'bell'
+    | 'user'
+    | 'folder'
+    | 'share'
+    | 'network'
+    | 'chevronLeft';
+
+const ICON_PATHS: Record<IconName, ReactNode> = {
+    power: (
+        <>
+            <path d="M12 3v9" />
+            <path d="M6.6 6.6a8 8 0 1 0 10.8 0" />
+        </>
+    ),
+    sun: (
+        <>
+            <circle cx="12" cy="12" r="4" />
+            <path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" />
+        </>
+    ),
+    moon: <path d="M20.5 14.3A8.5 8.5 0 0 1 9.7 3.5a8.5 8.5 0 1 0 10.8 10.8Z" />,
+    settings: (
+        <>
+            <circle cx="12" cy="12" r="3" />
+            <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1-1.55 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.6 9a1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.55V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1 1.55 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9v.09a1.7 1.7 0 0 0 1.55 1H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.51 1Z" />
+        </>
+    ),
+    refresh: (
+        <>
+            <path d="M20.5 12a8.5 8.5 0 1 1-2.5-6" />
+            <path d="M20.5 3.5V9H15" />
+        </>
+    ),
+    bell: (
+        <>
+            <path d="M18 8.5a6 6 0 0 0-12 0c0 6.5-2.5 8.5-2.5 8.5h17s-2.5-2-2.5-8.5Z" />
+            <path d="M13.7 20.5a2 2 0 0 1-3.4 0" />
+        </>
+    ),
+    user: (
+        <>
+            <circle cx="12" cy="8" r="3.6" />
+            <path d="M4.8 20.5a7.2 7.2 0 0 1 14.4 0" />
+        </>
+    ),
+    folder: <path d="M3.5 7.5a2 2 0 0 1 2-2h4.4l2 2h6.6a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2Z" />,
+    share: (
+        <>
+            <circle cx="6" cy="12" r="2.2" />
+            <circle cx="18" cy="6" r="2.2" />
+            <circle cx="18" cy="18" r="2.2" />
+            <path d="m8 11 8-4M8 13l8 4" />
+        </>
+    ),
+    network: (
+        <>
+            <circle cx="12" cy="5" r="2.2" />
+            <circle cx="5" cy="19" r="2.2" />
+            <circle cx="19" cy="19" r="2.2" />
+            <path d="M12 7.2v4.3M12 11.5 6.5 17.2M12 11.5l5.5 5.7" />
+        </>
+    ),
+    chevronLeft: <path d="m15 5-7 7 7 7" />,
+};
+
+// PawMark is the one piece of brand playfulness in the product: the app icon
+// reduced to a single cobalt glyph.
+function PawMark({size = 56}: {size?: number}) {
+    return (
+        <svg width={size} height={size} viewBox="0 0 64 64" aria-hidden="true">
+            <g fill="currentColor">
+                <ellipse cx="32" cy="43" rx="12.5" ry="9.5" />
+                <ellipse cx="17.5" cy="25" rx="4.8" ry="6.6" transform="rotate(-25 17.5 25)" />
+                <ellipse cx="26.5" cy="19" rx="5" ry="7" transform="rotate(-8 26.5 19)" />
+                <ellipse cx="37.5" cy="19" rx="5" ry="7" transform="rotate(8 37.5 19)" />
+                <ellipse cx="46.5" cy="25" rx="4.8" ry="6.6" transform="rotate(25 46.5 25)" />
+            </g>
+        </svg>
+    );
+}
+
+function Icon({name, size = 16}: {name: IconName; size?: number}) {
+    return (
+        <svg
+            width={size}
+            height={size}
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={1.8}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+        >
+            {ICON_PATHS[name]}
+        </svg>
+    );
+}
+
+const DEFAULT_GROUP = '内网通联系人';
 
 function peerKey(m: Member): string {
     return `${m.ip}:${m.port}`;
@@ -205,15 +333,72 @@ function fmtSize(n: number): string {
     return (n / Math.pow(1024, i)).toFixed(i === 0 ? 0 : 1) + ' ' + u[i];
 }
 
-function clock(): string {
-    const d = new Date();
-    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+function pad2(n: number): string {
+    return String(n).padStart(2, '0');
 }
+
+// Persist a full timestamp so history is still meaningful days later.
+function stampNow(): string {
+    return new Date().toISOString();
+}
+
+// fmtStamp renders a stored timestamp; older history entries only contain
+// "HH:mm" and are shown as-is.
+function fmtStamp(v: string): string {
+    if (!v) return '';
+    if (/^\d{1,2}:\d{2}$/.test(v)) return v;
+    const d = new Date(v);
+    if (Number.isNaN(d.getTime())) return v;
+    const hm = `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+    const today = new Date();
+    if (d.toDateString() === today.toDateString()) return hm;
+    const yesterday = new Date(today);
+    yesterday.setDate(today.getDate() - 1);
+    if (d.toDateString() === yesterday.toDateString()) return `昨天 ${hm}`;
+    const md = `${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+    return d.getFullYear() === today.getFullYear() ? `${md} ${hm}` : `${d.getFullYear()}-${md} ${hm}`;
+}
+
+// peerKey is "ip:port"; IPv4 addresses contain no ':' so the last one splits it.
+function parsePeerKey(key: string): {ip: string; port: number} {
+    const i = key.lastIndexOf(':');
+    if (i < 0) return {ip: key, port: 0};
+    return {ip: key.slice(0, i), port: Number(key.slice(i + 1)) || 0};
+}
+
+// Turn http(s) URLs inside a message into clickable links; they open in the
+// system browser rather than navigating the Wails webview.
+function renderText(text: string): ReactNode {
+    const parts = text.split(/(https?:\/\/[^\s]+)/g);
+    return parts.map((part, i) =>
+        /^https?:\/\//.test(part) ? (
+            <a
+                key={i}
+                className="msg-link"
+                href={part}
+                onClick={(e) => {
+                    e.preventDefault();
+                    OpenURL(part).catch(() => undefined);
+                }}
+            >
+                {part}
+            </a>
+        ) : (
+            <span key={i}>{part}</span>
+        ),
+    );
+}
+
+// Chromium allows only a handful of AudioContexts per page, so creating one
+// per beep silently stops the sound after ~6 notifications. Keep one instead.
+let audioCtx: any = null;
 
 function beep(): void {
     try {
         const Ctx = (window as any).AudioContext || (window as any).webkitAudioContext;
-        const ctx = new Ctx();
+        if (!audioCtx) audioCtx = new Ctx();
+        const ctx = audioCtx;
+        if (ctx.state === 'suspended') ctx.resume();
         const o = ctx.createOscillator();
         const g = ctx.createGain();
         o.connect(g);
@@ -260,10 +445,10 @@ function App() {
 
     const [showSettings, setShowSettings] = useState(false);
     const [settingsTab, setSettingsTab] = useState('profile');
-    const [showTransfers, setShowTransfers] = useState(true);
+    const [showTransfers, setShowTransfers] = useState(false);
     const [search, setSearch] = useState('');
     const [peerIp, setPeerIp] = useState('');
-    const [scanTarget, setScanTarget] = useState('172.17.32.');
+    const [scanTarget, setScanTarget] = useState('');
     const [emojiOpen, setEmojiOpen] = useState(false);
     const [myAvatar, setMyAvatar] = useState('');
     const [showAvatars, setShowAvatars] = useState(false);
@@ -284,7 +469,19 @@ function App() {
         enableTime: '',
         enableStatus: '',
     });
-    const [theme, setTheme] = useState<string>(() => localStorage.getItem('flydog.theme') || 'light');
+
+    // 共享文件夹
+    const [shareDir, setShareDir] = useState('');
+    const [sharePort, setSharePort] = useState(2427);
+    const [shareAllowUpload, setShareAllowUpload] = useState(true);
+    const [shareInfo, setShareInfo] = useState<ShareInfo | null>(null);
+    const [shareBusy, setShareBusy] = useState(false);
+
+    const [theme, setTheme] = useState<string>(() => {
+        // Keep the theme chosen before the rename, then store it under the
+        // new key from now on.
+        return localStorage.getItem('neiwangtong.theme') || localStorage.getItem('flydog.theme') || 'light';
+    });
 
     const seq = useRef(0);
     const cfgRef = useRef<any>({});
@@ -296,6 +493,7 @@ function App() {
     const typingTimer = useRef<number | undefined>(undefined);
     const lastTyping = useRef(0);
     const bottomRef = useRef<HTMLDivElement>(null);
+    const seenTransfers = useRef<Set<string>>(new Set());
 
     useEffect(() => {
         selectedRef.current = selectedKey;
@@ -312,12 +510,29 @@ function App() {
             nightOffAdapter,
             nightOffStart,
             nightOffEnd,
+            shareDir,
+            sharePort,
+            shareAllowUpload,
         };
-    }, [name, downloadDir, autoReceive, myAvatar, trayMode, nightOffEnabled, nightOffAdapter, nightOffStart, nightOffEnd]);
+    }, [
+        name,
+        downloadDir,
+        autoReceive,
+        myAvatar,
+        trayMode,
+        nightOffEnabled,
+        nightOffAdapter,
+        nightOffStart,
+        nightOffEnd,
+        shareDir,
+        sharePort,
+        shareAllowUpload,
+    ]);
 
     useEffect(() => {
         document.documentElement.dataset.theme = theme;
-        localStorage.setItem('flydog.theme', theme);
+        localStorage.setItem('neiwangtong.theme', theme);
+        localStorage.removeItem('flydog.theme');
     }, [theme]);
 
     useEffect(() => {
@@ -346,6 +561,19 @@ function App() {
                 setNightOffAdapter(c.nightOffAdapter || '');
                 setNightOffStart(c.nightOffStart || '22:00');
                 setNightOffEnd(c.nightOffEnd || '06:00');
+                setShareDir(c.shareDir || '');
+                setSharePort(c.sharePort || 2427);
+                setShareAllowUpload(c.shareAllowUpload !== false);
+                GetShareInfo()
+                    .then((s: any) => {
+                        if (s && s.running) {
+                            setShareInfo(s);
+                            setShareDir(s.dir || c.shareDir || '');
+                            setSharePort(s.port || c.sharePort || 2427);
+                            setShareAllowUpload(!!s.allowUpload);
+                        }
+                    })
+                    .catch(() => undefined);
                 ListAdapters().then((list: any) => setAdapters(list || [])).catch(() => undefined);
                 NightOffStatus().then(setNightOffInstalled).catch(() => undefined);
                 NightOffLastRuns().then((r: any) => r && setLastRuns(r)).catch(() => undefined);
@@ -363,6 +591,9 @@ function App() {
                         nightOffAdapter: c.nightOffAdapter,
                         nightOffStart: c.nightOffStart,
                         nightOffEnd: c.nightOffEnd,
+                        shareDir: c.shareDir,
+                        sharePort: c.sharePort,
+                        shareAllowUpload: c.shareAllowUpload,
                     }).catch(() => undefined);
                 }
                 if (await IsRunning()) {
@@ -389,9 +620,18 @@ function App() {
                             text: m.text || '',
                             files: m.files || [],
                             time: m.time || '',
+                            peerName: m.peerName || '',
                         });
                     });
-                    setConvs(c);
+                    // Merge instead of replacing: a message may have arrived
+                    // while the history file was being read.
+                    setConvs((live) => {
+                        const merged: Record<string, ChatMsg[]> = {...c};
+                        Object.keys(live).forEach((key) => {
+                            merged[key] = [...(c[key] || []), ...live[key]];
+                        });
+                        return merged;
+                    });
                 })
                 .catch(() => undefined)
                 .finally(() => {
@@ -433,7 +673,14 @@ function App() {
                 return;
             }
             const files = (m.files || []).map((f: any) => f.Name);
-            addConv(key, {dir: 'in', kind, text: m.text || '', files, time: clock()});
+            addConv(key, {
+                dir: 'in',
+                kind,
+                text: m.text || '',
+                files,
+                time: stampNow(),
+                peerName: peer.name || peer.ip,
+            });
             setTyping((t) => ({...t, [key]: false}));
 
             if (kind === 'knock') {
@@ -448,12 +695,18 @@ function App() {
                 const body = kind === 'image' ? '[图片]' : m.text || '[新消息]';
                 addToast(peer.name || peer.ip, body.slice(0, 80));
                 beep();
-                sysNotify(peer.name || 'FlyDog', body.slice(0, 120));
+                sysNotify(peer.name || '内网通', body.slice(0, 120));
             }
         });
-        const offTransfer = onEvent('transfer', (t: Transfer) =>
-            setTransfers((prev) => ({...prev, [t.id]: t})),
-        );
+        const offTransfer = onEvent('transfer', (t: Transfer) => {
+            // Open the panel for a new transfer, but don't force it back open
+            // while the user is watching progress or has collapsed it.
+            if (!seenTransfers.current.has(t.id)) {
+                seenTransfers.current.add(t.id);
+                setShowTransfers(true);
+            }
+            setTransfers((prev) => ({...prev, [t.id]: t}));
+        });
         const offError = onEvent('engine:error', (s: string) => setError(s));
         return () => {
             offMembers();
@@ -471,7 +724,15 @@ function App() {
             const flat: any[] = [];
             Object.keys(convs).forEach((key) =>
                 (convs[key] || []).forEach((m) =>
-                    flat.push({peer: key, dir: m.dir, kind: m.kind, text: m.text, files: m.files, time: m.time}),
+                    flat.push({
+                        peer: key,
+                        peerName: m.peerName || '',
+                        dir: m.dir,
+                        kind: m.kind,
+                        text: m.text,
+                        files: m.files,
+                        time: m.time,
+                    }),
                 ),
             );
             SaveHistory(flat).catch(() => undefined);
@@ -482,25 +743,98 @@ function App() {
     const totalUnread = Object.values(unread).reduce((a, b) => a + b, 0);
 
     useEffect(() => {
-        document.title = (totalUnread ? `(${totalUnread}) ` : '') + 'FlyDog';
+        document.title = (totalUnread ? `(${totalUnread}) ` : '') + '内网通';
     }, [totalUnread]);
 
+    // Conversations whose peer is no longer online still have saved history;
+    // surface them in the sidebar instead of hiding them until the peer
+    // reappears.
+    const historyContacts = useMemo<Contact[]>(() => {
+        const online = new Set(members.map(peerKey));
+        const out: Contact[] = [];
+        Object.keys(convs).forEach((key) => {
+            if (online.has(key)) return;
+            const msgs = convs[key] || [];
+            if (msgs.length === 0) return;
+            const last = msgs[msgs.length - 1];
+            const {ip, port} = parsePeerKey(key);
+            const preview =
+                last.kind === 'knock'
+                    ? '窗口抖动'
+                    : last.text.replace(/\s+/g, ' ').trim() ||
+                      (last.files.length ? `[文件] ${last.files.join('、')}` : '');
+            out.push({
+                name: last.peerName || ip,
+                group: '',
+                host: '',
+                ip,
+                port,
+                absence: true,
+                utf8: false,
+                offline: true,
+                lastText: preview.slice(0, 40),
+                lastAt: last.time,
+            });
+        });
+        out.sort((a, b) => (b.lastAt || '').localeCompare(a.lastAt || '') || a.name.localeCompare(b.name));
+        return out;
+    }, [convs, members]);
+
     const selected = useMemo(
-        () => members.find((m) => peerKey(m) === selectedKey) || null,
-        [members, selectedKey],
+        () =>
+            members.find((m) => peerKey(m) === selectedKey) ||
+            historyContacts.find((m) => peerKey(m) === selectedKey) ||
+            null,
+        [members, historyContacts, selectedKey],
     );
+    const selectedOffline = !!selected && !members.some((m) => peerKey(m) === selectedKey);
 
     useEffect(() => {
         bottomRef.current?.scrollIntoView({behavior: 'smooth'});
     }, [convs, selectedKey, typing]);
 
-    const filtered = useMemo(() => {
+    const filteredMembers = useMemo(() => {
         const q = search.trim().toLowerCase();
         if (!q) return members;
         return members.filter(
-            (m) => m.name.toLowerCase().includes(q) || m.host.toLowerCase().includes(q) || m.ip.includes(q),
+            (m) =>
+                m.name.toLowerCase().includes(q) ||
+                m.host.toLowerCase().includes(q) ||
+                m.ip.includes(q) ||
+                (m.group || '').toLowerCase().includes(q),
         );
     }, [members, search]);
+
+    const groupedMembers = useMemo(() => {
+        const groups = new Map<string, Member[]>();
+        filteredMembers.forEach((m) => {
+            const name = (m.group || '').trim() || DEFAULT_GROUP;
+            const list = groups.get(name) || [];
+            list.push(m);
+            groups.set(name, list);
+        });
+        const out = Array.from(groups.entries()).map(([name, list]) => ({name, members: list}));
+        out.sort((a, b) => {
+            if (a.name === DEFAULT_GROUP) return -1;
+            if (b.name === DEFAULT_GROUP) return 1;
+            return a.name.localeCompare(b.name);
+        });
+        return out;
+    }, [filteredMembers]);
+    const showGroupHeaders =
+        groupedMembers.length > 1 ||
+        (groupedMembers.length === 1 && groupedMembers[0].name !== DEFAULT_GROUP);
+
+    const filteredHistory = useMemo(() => {
+        const q = search.trim().toLowerCase();
+        if (!q) return historyContacts;
+        return historyContacts.filter(
+            (m) =>
+                m.name.toLowerCase().includes(q) ||
+                m.ip.includes(q) ||
+                (m.lastText || '').toLowerCase().includes(q),
+        );
+    }, [historyContacts, search]);
 
     const transferList = Object.values(transfers).slice(-30).reverse();
 
@@ -524,24 +858,31 @@ function App() {
         }
     }
 
-    function selectPeer(m: Member) {
+    function selectPeer(m: Member, offline = false) {
         const key = peerKey(m);
         setSelectedKey(key);
         setUnread((u) => ({...u, [key]: 0}));
         setTyping((t) => ({...t, [key]: false}));
-        OpenYou(m.ip, m.port).catch(() => undefined);
+        if (!offline) OpenYou(m.ip, m.port).catch(() => undefined);
     }
 
     async function send() {
         const m = selected;
-        if (!m || !input.trim()) return;
+        if (!m || selectedOffline || !input.trim()) return;
         const text = input;
         setInput('');
         window.clearTimeout(typingTimer.current);
         SendTyping(m.ip, m.port, false).catch(() => undefined);
         try {
             await SendText(m.ip, m.port, text);
-            addConv(peerKey(m), {dir: 'out', kind: 'text', text, files: [], time: clock()});
+            addConv(peerKey(m), {
+                dir: 'out',
+                kind: 'text',
+                text,
+                files: [],
+                time: stampNow(),
+                peerName: m.name || m.ip,
+            });
         } catch (e: any) {
             setError(String(e));
         }
@@ -550,7 +891,7 @@ function App() {
     function onInputChange(v: string) {
         setInput(v);
         const m = selected;
-        if (!m) return;
+        if (!m || selectedOffline) return;
         const now = Date.now();
         if (now - lastTyping.current > 2000) {
             lastTyping.current = now;
@@ -564,7 +905,7 @@ function App() {
 
     async function knock() {
         const m = selected;
-        if (!m) return;
+        if (!m || selectedOffline) return;
         try {
             await SendKnock(m.ip, m.port);
         } catch (e: any) {
@@ -575,7 +916,7 @@ function App() {
 
     async function attach(kind: 'file' | 'folder') {
         const m = selected;
-        if (!m) return;
+        if (!m || selectedOffline) return;
         try {
             const paths = kind === 'file' ? await PickFiles() : [await PickFolder()];
             const valid = (paths || []).filter((p) => p);
@@ -587,7 +928,8 @@ function App() {
                 kind: 'text',
                 text: '',
                 files: (files || []).map((f: any) => f.Name),
-                time: clock(),
+                time: stampNow(),
+                peerName: m.name || m.ip,
             });
         } catch (e: any) {
             setError(String(e));
@@ -685,11 +1027,120 @@ function App() {
     }
 
     function uploadAvatar(file: File) {
+        if (file.size > 512 * 1024) {
+            setError('头像图片请小于 512KB');
+            return;
+        }
         const r = new FileReader();
         r.onload = () => {
             if (typeof r.result === 'string') chooseAvatar(r.result);
         };
         r.readAsDataURL(file);
+    }
+
+    async function pickShareDir() {
+        try {
+            const p = await PickFolder();
+            if (p) setShareDir(p);
+        } catch (e: any) {
+            setError(String(e));
+        }
+    }
+
+    async function startShare() {
+        const dir = shareDir.trim();
+        if (!dir) {
+            setError('请先选择要共享的文件夹');
+            return;
+        }
+        setShareBusy(true);
+        setError('');
+        try {
+            const info: any = await StartShare(dir, Number(sharePort) || 2427, shareAllowUpload);
+            setShareInfo(info);
+            setSharePort(info.port || 2427);
+            saveCfg({shareDir: dir, sharePort: info.port || 2427, shareAllowUpload});
+            addToast('共享已开启', (info.urls && info.urls[0]) || '');
+        } catch (e: any) {
+            setError(String(e));
+        } finally {
+            setShareBusy(false);
+        }
+    }
+
+    async function stopShare() {
+        setShareBusy(true);
+        setError('');
+        try {
+            await StopShare();
+            setShareInfo(null);
+            saveCfg({shareDir, sharePort, shareAllowUpload});
+        } catch (e: any) {
+            setError(String(e));
+        } finally {
+            setShareBusy(false);
+        }
+    }
+
+    async function copyText(v: string) {
+        try {
+            await navigator.clipboard.writeText(v);
+            addToast('已复制', v);
+        } catch {
+            try {
+                await CopyText(v);
+                addToast('已复制', v);
+            } catch {
+                setError('复制失败，请手动选择链接');
+            }
+        }
+    }
+
+    // Prefer the share URL on the same /24 as the peer, so cross-subnet setups
+    // still hand out a reachable address.
+    function pickShareURL(peerIP: string): string {
+        const urls = shareInfo?.urls || [];
+        if (!urls.length) return '';
+        const prefix = peerIP.split('.').slice(0, 3).join('.') + '.';
+        const match = urls.find((u) => {
+            try {
+                return new URL(u).hostname.startsWith(prefix);
+            } catch {
+                return false;
+            }
+        });
+        return match || urls[0];
+    }
+
+    async function sendShareLink() {
+        const m = selected;
+        if (!m || selectedOffline) return;
+        if (!shareInfo?.running) {
+            setSettingsTab('share');
+            setShowSettings(true);
+            setError('还没有开启共享文件夹，请先在「设置 → 共享」里选择文件夹并开始共享。');
+            return;
+        }
+        const url = pickShareURL(m.ip);
+        if (!url) {
+            setError('共享链接为空，请重新开始共享');
+            return;
+        }
+        const text = `我给你共享了一个文件夹，打开链接可以浏览、下载和上传：\n${url}`;
+        try {
+            await SendText(m.ip, m.port, text);
+            addConv(peerKey(m), {
+                dir: 'out',
+                kind: 'text',
+                text,
+                files: [],
+                time: stampNow(),
+                peerName: m.name || m.ip,
+            });
+            addToast('共享链接已发送', url);
+        } catch (e: any) {
+            setError(String(e));
+        }
     }
 
     async function refresh() {
@@ -729,6 +1180,33 @@ function App() {
         }
     }
 
+    function contactRow(m: Member) {
+        const key = peerKey(m);
+        const n = unread[key] || 0;
+        return (
+            <div
+                key={key}
+                className={'contact' + (key === selectedKey ? ' active' : '')}
+                title={`${m.name || m.ip}\n${m.ip}${m.host ? '  ' + m.host : ''}`}
+                onClick={() => selectPeer(m)}
+            >
+                <div className="avatar-wrap">
+                    <Avatar name={m.name} size={38} />
+                    <span className={'presence' + (m.absence ? ' off' : '')} />
+                </div>
+                <div className="contact-info">
+                    <div className="contact-name">{m.name || m.ip}</div>
+                    <div className="contact-sub">
+                        <span className="mono">{m.ip}</span>
+                        {m.absence && <span className="tag">离开</span>}
+                    </div>
+                </div>
+                {typing[key] && <span className="typing-tag">输入中</span>}
+                {n > 0 && <span className="badge">{n > 99 ? '99+' : n}</span>}
+            </div>
+        );
+    }
+
     const chat = selectedKey ? convs[selectedKey] || [] : [];
     const nightOffAdapterName =
         adapters.find((a) => String(a.index) === nightOffAdapter)?.name || nightOffAdapter || '未选择';
@@ -759,18 +1237,22 @@ function App() {
                     <button
                         className={'power' + (running ? ' on' : '')}
                         title={running ? '点击停止' : '点击启动'}
+                        aria-label={running ? '停止服务' : '启动服务'}
                         onClick={toggle}
                     >
-                        {running ? '■' : '▶'}
+                        <Icon name="power" size={15} />
                     </button>
                     <button
                         className="icon-btn"
                         title={theme === 'dark' ? '切换到浅色' : '切换到深色'}
+                        aria-label="切换主题"
                         onClick={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))}
                     >
-                        {theme === 'dark' ? '☀' : '🌙'}
+                        <Icon name={theme === 'dark' ? 'sun' : 'moon'} size={16} />
                     </button>
-                    <button className="icon-btn" title="设置" onClick={() => setShowSettings(true)}>⚙</button>
+                    <button className="icon-btn" title="设置" aria-label="设置" onClick={() => setShowSettings(true)}>
+                        <Icon name="settings" size={16} />
+                    </button>
                 </div>
 
                 <div className="search">
@@ -778,26 +1260,42 @@ function App() {
                 </div>
 
                 <div className="list">
-                    {filtered.length === 0 && <div className="empty">{running ? '未发现在线用户' : '点击「启动」开始'}</div>}
-                    {filtered.map((m) => {
+                    {filteredMembers.length === 0 && filteredHistory.length === 0 && (
+                        <div className="empty">{running ? '未发现在线用户' : '点击「启动」开始'}</div>
+                    )}
+                    {groupedMembers.map((g) => (
+                        <Fragment key={g.name}>
+                            {showGroupHeaders && (
+                                <div className="list-section">{g.name === DEFAULT_GROUP ? '在线用户' : g.name}</div>
+                            )}
+                            {g.members.map(contactRow)}
+                        </Fragment>
+                    ))}
+                    {filteredHistory.length > 0 && <div className="list-section">历史会话</div>}
+                    {filteredHistory.map((m) => {
                         const key = peerKey(m);
                         const n = unread[key] || 0;
                         return (
-                            <div key={key} className={'contact' + (key === selectedKey ? ' active' : '')} onClick={() => selectPeer(m)}>
+                            <div
+                                key={key}
+                                className={'contact offline' + (key === selectedKey ? ' active' : '')}
+                                onClick={() => selectPeer(m, true)}
+                            >
                                 <div className="avatar-wrap">
                                     <Avatar name={m.name} size={38} />
-                                    <span className={'presence' + (m.absence ? ' off' : '')} />
+                                    <span className="presence off" />
                                 </div>
                                 <div className="contact-info">
                                     <div className="contact-name">{m.name || m.ip}</div>
                                     <div className="contact-sub">
-                                        {m.ip}
-                                        {m.group ? ` · ${m.group}` : ''}
-                                        {m.host && m.host !== m.name ? ` · ${m.host}` : ''}
-                                        {m.absence ? ' · 离开' : ''}
+                                        <span className="mono">{m.ip}</span>
+                                        {m.lastText && (
+                                            <span className="preview" title={m.lastText}>
+                                                {m.lastText}
+                                            </span>
+                                        )}
                                     </div>
                                 </div>
-                                {typing[key] && <span className="typing-tag">输入中</span>}
                                 {n > 0 && <span className="badge">{n > 99 ? '99+' : n}</span>}
                             </div>
                         );
@@ -805,7 +1303,10 @@ function App() {
                 </div>
 
                 <div className="sidebar-actions">
-                    <button onClick={refresh} disabled={!running}>刷新在线用户</button>
+                    <button onClick={refresh} disabled={!running}>
+                        <Icon name="refresh" size={14} />
+                        刷新在线用户
+                    </button>
                 </div>
             </aside>
 
@@ -819,18 +1320,67 @@ function App() {
                             </div>
                             <div className="chat-title">
                                 <div className="chat-name">{selected.name}</div>
-                                <div className={'chat-sub' + (typing[selectedKey] ? ' typing' : '')}>
-                                    {typing[selectedKey] ? '正在输入…' : `${selected.ip}${selected.group ? ' · ' + selected.group : ''}${selected.absence ? ' · 离开' : ''}`}
+                                <div className={'chat-sub' + (typing[selectedKey] && !selectedOffline ? ' typing' : '')}>
+                                    {selectedOffline ? (
+                                        <>
+                                            <span>离线</span>
+                                            <span className="mono">{selected.ip}</span>
+                                            <span className="tag">仅显示历史消息</span>
+                                        </>
+                                    ) : typing[selectedKey] ? (
+                                        '正在输入…'
+                                    ) : (
+                                        <>
+                                            {selected.group && selected.group !== DEFAULT_GROUP && (
+                                                <span className="tag">{selected.group}</span>
+                                            )}
+                                            <span className="mono">{selected.ip}</span>
+                                            {selected.absence && <span className="tag">离开</span>}
+                                        </>
+                                    )}
                                 </div>
                             </div>
                             <div className="chat-actions">
-                                <button className="ghost" title="窗口抖动" onClick={knock}>🪟 抖一抖</button>
-                                <button className="ghost" onClick={() => attach('file')}>文件</button>
-                                <button className="ghost" onClick={() => attach('folder')}>文件夹</button>
+                                <button
+                                    className="ghost"
+                                    title={selectedOffline ? '对方不在线' : '窗口抖动'}
+                                    onClick={knock}
+                                    disabled={selectedOffline}
+                                >
+                                    <Icon name="bell" size={14} />
+                                    抖一抖
+                                </button>
+                                <button className="ghost" onClick={() => attach('file')} disabled={selectedOffline}>
+                                    文件
+                                </button>
+                                <button className="ghost" onClick={() => attach('folder')} disabled={selectedOffline}>
+                                    文件夹
+                                </button>
+                                <button
+                                    className="ghost"
+                                    onClick={sendShareLink}
+                                    disabled={selectedOffline}
+                                    title="发送我的共享文件夹链接"
+                                >
+                                    共享
+                                </button>
                             </div>
                         </header>
 
                         <div className="messages">
+                            {chat.length === 0 && !typing[selectedKey] && (
+                                <div className="chat-empty">
+                                    <Avatar name={selected.name} size={58} />
+                                    <div className="chat-empty-title">和 {selected.name} 打个招呼</div>
+                                    <div className="chat-empty-sub">
+                                        <span className="mono">{selected.ip}</span>
+                                        {selected.group && selected.group !== DEFAULT_GROUP && (
+                                            <span className="tag">{selected.group}</span>
+                                        )}
+                                        <span>消息只在本机局域网传输</span>
+                                    </div>
+                                </div>
+                            )}
                             {chat.map((msg, i) => {
                                 const prev = chat[i - 1];
                                 const grouped =
@@ -849,13 +1399,13 @@ function App() {
                                                 <div className="bubble">[图片]</div>
                                             ) : (
                                                 <div className="bubble">
-                                                    {msg.text && <div className="text">{msg.text}</div>}
+                                                    {msg.text && <div className="text">{renderText(msg.text)}</div>}
                                                     {msg.files.map((f, j) => (
                                                         <div className="file" key={j}>📎 {f}</div>
                                                     ))}
                                                 </div>
                                             )}
-                                            <div className="stamp">{msg.time}</div>
+                                            <div className="stamp">{fmtStamp(msg.time)}</div>
                                         </div>
                                         {msg.dir === 'out' &&
                                             (grouped ? <div className="avatar-spacer" /> : <Avatar src={myAvatar} name={name} size={30} />)}
@@ -873,42 +1423,49 @@ function App() {
                             <div ref={bottomRef} />
                         </div>
 
-                        <footer className="composer">
-                            <div className="composer-box">
-                                <div className="composer-tools">
-                                    <button className="icon-btn" title="表情" onClick={() => setEmojiOpen((v) => !v)}>😊</button>
-                                    <button className="icon-btn" title="发送文件" onClick={() => attach('file')}>📎</button>
-                                    <button className="icon-btn" title="发送文件夹" onClick={() => attach('folder')}>📁</button>
+                        {selectedOffline ? (
+                            <footer className="composer composer-offline">
+                                <span>对方当前不在线，这里仅显示已保存的历史消息。</span>
+                            </footer>
+                        ) : (
+                            <footer className="composer">
+                                <div className="composer-box">
+                                    <div className="composer-tools">
+                                        <button className="icon-btn" title="表情" onClick={() => setEmojiOpen((v) => !v)}>😊</button>
+                                        <button className="icon-btn" title="发送文件" onClick={() => attach('file')}>📎</button>
+                                        <button className="icon-btn" title="发送文件夹" onClick={() => attach('folder')}>📁</button>
+                                    </div>
+                                    <textarea
+                                        className="msg-input"
+                                        value={input}
+                                        onChange={(e) => onInputChange(e.target.value)}
+                                        onKeyDown={(e) => {
+                                            if (e.key === 'Enter' && !e.shiftKey) {
+                                                e.preventDefault();
+                                                send();
+                                            }
+                                        }}
+                                        placeholder="输入消息，Enter 发送，Shift+Enter 换行"
+                                        rows={2}
+                                    />
                                 </div>
-                                <textarea
-                                    className="msg-input"
-                                    value={input}
-                                    onChange={(e) => onInputChange(e.target.value)}
-                                    onKeyDown={(e) => {
-                                        if (e.key === 'Enter' && !e.shiftKey) {
-                                            e.preventDefault();
-                                            send();
-                                        }
-                                    }}
-                                    placeholder="输入消息，Enter 发送，Shift+Enter 换行"
-                                    rows={2}
-                                />
-                            </div>
-                            <button className="send-btn" onClick={send} disabled={!input.trim()}>发送</button>
-                            {emojiOpen && (
-                                <div className="emoji-pop">
-                                    {EMOJIS.map((e) => (
-                                        <button key={e} onClick={() => { setInput((v) => v + e); setEmojiOpen(false); }}>{e}</button>
-                                    ))}
-                                </div>
-                            )}
-                        </footer>
+                                <button className="send-btn" onClick={send} disabled={!input.trim()}>发送</button>
+                                {emojiOpen && (
+                                    <div className="emoji-pop">
+                                        {EMOJIS.map((e) => (
+                                            <button key={e} onClick={() => { setInput((v) => v + e); setEmojiOpen(false); }}>{e}</button>
+                                        ))}
+                                    </div>
+                                )}
+                            </footer>
+                        )}
                     </>
                 ) : (
                     <div className="welcome">
-                        <div className="welcome-logo">🐕</div>
-                        <div className="welcome-title">FlyDog 局域网传输</div>
-                        <div className="welcome-sub">{running ? '从左侧选择一位用户开始聊天' : '点击右上角「启动」开始使用'}</div>
+                        <div className="welcome-logo"><PawMark size={56} /></div>
+                        <div className="welcome-title">内网通</div>
+                        <div className="welcome-sub">局域网通讯与文件传输</div>
+                        <div className="welcome-hint">{running ? '从左侧选择一位用户开始聊天' : '点击右上角「启动」开始使用'}</div>
                     </div>
                 )}
             </main>
@@ -946,7 +1503,7 @@ function App() {
                     </>
                 ) : (
                     <button className="rail-btn" title="展开传输面板" onClick={() => setShowTransfers(true)}>
-                        <span className="rail-arrow">‹</span>
+                        <span className="rail-arrow"><Icon name="chevronLeft" size={16} /></span>
                         <span className="rail-label">传输</span>
                     </button>
                 )}
@@ -1022,7 +1579,7 @@ function App() {
                                         className={'settings-tab' + (settingsTab === t.key ? ' active' : '')}
                                         onClick={() => setSettingsTab(t.key)}
                                     >
-                                        <span className="tab-ico">{t.icon}</span>
+                                        <span className="tab-ico"><Icon name={t.icon} size={15} /></span>
                                         {t.label}
                                     </button>
                                 ))}
@@ -1074,6 +1631,7 @@ function App() {
                                             />
                                             <span>自动接收文件</span>
                                         </label>
+                                        <p className="hint">修改后需先停止再启动引擎才会生效。</p>
 
                                         <div className="divider">聊天记录</div>
                                         <div className="field row">
@@ -1091,6 +1649,78 @@ function App() {
                                     </section>
                                 )}
 
+                                {settingsTab === 'share' && (
+                                    <section className="pane">
+                                        <h4>共享文件夹</h4>
+                                        <p className="hint">
+                                            同事收到链接后，用浏览器即可浏览和下载；开启“允许上传”后，同事也能把文件放进这个文件夹。
+                                        </p>
+                                        <label className="field">
+                                            <span>共享目录</span>
+                                            <div className="inline">
+                                                <input
+                                                    value={shareDir}
+                                                    onChange={(e) => setShareDir(e.target.value)}
+                                                    placeholder="选择要共享的文件夹"
+                                                    disabled={!!shareInfo?.running || shareBusy}
+                                                />
+                                                <button className="btn" disabled={!!shareInfo?.running || shareBusy} onClick={pickShareDir}>
+                                                    选择
+                                                </button>
+                                            </div>
+                                        </label>
+                                        <div className="inline">
+                                            <label className="field" style={{flex: 1}}>
+                                                <span>端口</span>
+                                                <input
+                                                    type="number"
+                                                    min={1}
+                                                    max={65535}
+                                                    value={sharePort}
+                                                    onChange={(e) => setSharePort(Number(e.target.value) || 0)}
+                                                    disabled={!!shareInfo?.running || shareBusy}
+                                                />
+                                            </label>
+                                            <label className="field row" style={{alignSelf: 'flex-end'}}>
+                                                <input
+                                                    type="checkbox"
+                                                    checked={shareAllowUpload}
+                                                    onChange={(e) => setShareAllowUpload(e.target.checked)}
+                                                    disabled={!!shareInfo?.running || shareBusy}
+                                                />
+                                                <span>允许对方上传</span>
+                                            </label>
+                                        </div>
+                                        <div className="inline">
+                                            <button className="btn primary" disabled={shareBusy || !!shareInfo?.running} onClick={startShare}>
+                                                {shareBusy ? '处理中…' : '开始共享'}
+                                            </button>
+                                            <button className="btn" disabled={shareBusy || !shareInfo?.running} onClick={stopShare}>
+                                                停止共享
+                                            </button>
+                                        </div>
+                                        {shareInfo?.running ? (
+                                            <>
+                                                <div className="divider">共享链接</div>
+                                                {(shareInfo.urls || []).map((u) => (
+                                                    <div className="share-url" key={u}>
+                                                        <span className="share-url-text" title={u}>{u}</span>
+                                                        <button className="link" onClick={() => copyText(u)}>复制</button>
+                                                        <button className="link" onClick={() => OpenURL(u).catch(() => undefined)}>打开</button>
+                                                    </div>
+                                                ))}
+                                                <p className="hint">
+                                                    链接里带有随机访问令牌，拿到链接的人都能浏览{shareInfo.allowUpload ? '、下载和上传' : '和下载'}。停止共享后链接立即失效，重新开始会生成新链接。
+                                                </p>
+                                            </>
+                                        ) : (
+                                            <p className="hint">
+                                                未开始共享。选择文件夹后点「开始共享」；首次使用需要在防火墙放行 TCP {sharePort || 2427}。
+                                            </p>
+                                        )}
+                                    </section>
+                                )}
+
                                 {settingsTab === 'network' && (
                                     <>
                                         <section className="pane">
@@ -1099,7 +1729,7 @@ function App() {
                                                 <input
                                                     value={scanTarget}
                                                     onChange={(e) => setScanTarget(e.target.value)}
-                                                    placeholder="扫描网段 如 172.17.32. 或 /24"
+                                                    placeholder="扫描网段，如 192.168.1. 或 192.168.1.0/24"
                                                     disabled={!running}
                                                 />
                                                 <button className="btn" onClick={doScan} disabled={!running}>扫描</button>
@@ -1127,7 +1757,7 @@ function App() {
                                                         saveCfg({nightOffEnabled: e.target.checked});
                                                     }}
                                                 />
-                                                <span>启用（到点自动禁用网卡，次日恢复）</span>
+                                                <span>启用（到点自动断网；需点下方「应用」写入计划任务）</span>
                                             </label>
                                             <label className="field">
                                                 <span>网卡</span>
@@ -1190,7 +1820,7 @@ function App() {
                                             </div>
                                             <p className="hint">
                                                 {nightOffInstalled
-                                                    ? `已生效：每天 ${nightOffStart} 禁用「${nightOffAdapterName}」，${nightOffEnd} 恢复（由 Windows 计划任务执行，FlyDog 关闭也会生效）`
+                                                    ? `已生效：每天 ${nightOffStart} 禁用「${nightOffAdapterName}」，${nightOffEnd} 恢复（由 Windows 计划任务执行，内网通关闭也会生效）`
                                                     : '未安装。点「应用」会弹出 UAC，请允许管理员权限。'}
                                             </p>
                                             <p className="hint">

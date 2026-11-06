@@ -27,6 +27,39 @@ func waitMembers(t *testing.T, n int, engines ...*Engine) {
 	t.Fatalf("timed out waiting for %d members on all engines", n)
 }
 
+// An outbound peer connection must be removed from the peer map when the
+// remote side goes away, otherwise the stale entry keeps sendViaTCP from ever
+// dialing again.
+func TestOutboundPeerDroppedWhenRemoteCloses(t *testing.T) {
+	a := New(Config{Name: "alice3", Host: "ha", Port: 35021, TCPPort: 36021}, Callbacks{})
+	b := New(Config{Name: "bob3", Host: "hb", Port: 35022, TCPPort: 36022}, Callbacks{})
+	if err := a.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer a.Stop()
+	if err := b.Start(); err != nil {
+		t.Fatal(err)
+	}
+
+	if !a.dialTCPPeerPort("127.0.0.1", 36022) {
+		t.Fatal("dial to peer failed")
+	}
+	if _, ok := a.getPeer("127.0.0.1"); !ok {
+		t.Fatal("peer entry missing after dial")
+	}
+
+	b.Stop()
+
+	deadline := time.Now().Add(4 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, ok := a.getPeer("127.0.0.1"); !ok {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatal("stale peer entry left in the map after the remote closed")
+}
+
 func TestTCPPeerDiscoveryAndMessage(t *testing.T) {
 	a := New(Config{Name: "alice", Host: "ha", Port: 35011, TCPPort: 36011}, Callbacks{})
 	bMsgs := make(chan Message, 4)

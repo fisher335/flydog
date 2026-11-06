@@ -84,13 +84,19 @@ func parseScanTarget(target string, local map[string]bool) ([]net.IP, error) {
 	target = strings.TrimSpace(target)
 	if target == "" {
 		var ips []net.IP
+		seen := make(map[string]bool)
 		for ipstr := range local {
 			ip := net.ParseIP(ipstr).To4()
 			if ip == nil {
 				continue
 			}
 			for i := 1; i < 255; i++ {
-				ips = append(ips, net.IPv4(ip[0], ip[1], ip[2], byte(i)))
+				cand := net.IPv4(ip[0], ip[1], ip[2], byte(i))
+				if seen[cand.String()] {
+					continue
+				}
+				seen[cand.String()] = true
+				ips = append(ips, cand)
 			}
 		}
 		return ips, nil
@@ -101,9 +107,16 @@ func parseScanTarget(target string, local map[string]bool) ([]net.IP, error) {
 		if err != nil {
 			return nil, fmt.Errorf("无效的网段: %q", target)
 		}
+		if ip.To4() == nil {
+			return nil, fmt.Errorf("仅支持 IPv4 网段: %q", target)
+		}
 		var ips []net.IP
-		for cur := ip.Mask(ipnet.Mask); ipnet.Contains(cur) && len(ips) < maxScanAddrs; incIP(cur) {
+		cur := ip.Mask(ipnet.Mask)
+		for ipnet.Contains(cur) && len(ips) < maxScanAddrs {
 			ips = append(ips, net.IPv4(cur[0], cur[1], cur[2], cur[3]))
+			if !incIP(cur) {
+				break
+			}
 		}
 		return ips, nil
 	}
@@ -128,18 +141,22 @@ func parseScanTarget(target string, local map[string]bool) ([]net.IP, error) {
 				return nil, fmt.Errorf("无效的结束地址: %q", endStr)
 			}
 		}
-		cur := net.IPv4(start[0], start[1], start[2], start[3])
+		if compareIPv4(start, end) > 0 {
+			return nil, fmt.Errorf("结束地址 %s 小于起始地址 %s", end, start)
+		}
+		// net.IPv4 returns a 16-byte IPv4-in-IPv6 address; indexing it would
+		// read the prefix bytes instead of the address, so stay on 4-byte
+		// slices here.
+		cur := append(net.IP(nil), start...)
 		var ips []net.IP
 		for len(ips) < maxScanAddrs {
-			ips = append(ips, cur)
+			ips = append(ips, append(net.IP(nil), cur...))
 			if cur.Equal(end) {
 				break
 			}
-			next := net.IPv4(cur[0], cur[1], cur[2], cur[3]+1)
-			if next[3] == 0 && cur[3] == 255 {
+			if !incIP(cur) {
 				break
 			}
-			cur = next
 		}
 		return ips, nil
 	}
@@ -154,18 +171,33 @@ func parseScanTarget(target string, local map[string]bool) ([]net.IP, error) {
 		return ips, nil
 	}
 
-	ip := net.ParseIP(target)
+	ip := net.ParseIP(target).To4()
 	if ip == nil {
 		return nil, fmt.Errorf("无效的地址: %q", target)
 	}
-	return []net.IP{ip.To4()}, nil
+	return []net.IP{ip}, nil
 }
 
-func incIP(ip net.IP) {
+// compareIPv4 compares two 4-byte IPv4 addresses.
+func compareIPv4(a, b net.IP) int {
+	for i := 0; i < 4; i++ {
+		if a[i] != b[i] {
+			if a[i] < b[i] {
+				return -1
+			}
+			return 1
+		}
+	}
+	return 0
+}
+
+// incIP increments ip in place and reports false on overflow.
+func incIP(ip net.IP) bool {
 	for i := len(ip) - 1; i >= 0; i-- {
 		ip[i]++
 		if ip[i] != 0 {
-			break
+			return true
 		}
 	}
+	return false
 }

@@ -15,7 +15,13 @@ func (e *Engine) emitTransfer(t Transfer) {
 		e.progMu.Unlock()
 		return
 	}
-	e.progLast[t.ID] = now
+	if t.State == StateRunning {
+		e.progLast[t.ID] = now
+	} else {
+		// The transfer is finished; drop its throttle entry so the map does
+		// not grow for the lifetime of the process.
+		delete(e.progLast, t.ID)
+	}
 	e.progMu.Unlock()
 
 	e.cb.OnTransfer(t)

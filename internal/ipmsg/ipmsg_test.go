@@ -123,6 +123,29 @@ func TestDirHeaderRoundTrip(t *testing.T) {
 	}
 }
 
+func TestSplitTextFormat(t *testing.T) {
+	cases := []struct {
+		in     string
+		text   string
+		format string
+	}{
+		{"hello", "hello", ""},
+		{"你好{宋体;9;0;0}", "你好", "宋体;9;0;0"},
+		{"hi{Microsoft YaHei;10;0}", "hi", "Microsoft YaHei;10;0"},
+		// Not a format string: must not lose the tail of a real message.
+		{"看这个数组 {1,2}", "看这个数组 {1,2}", ""},
+		{"配置 {a;b}", "配置 {a;b}", ""},
+		{"多行{宋体;9\n;0}", "多行{宋体;9\n;0}", ""},
+		{"结尾是代码 }", "结尾是代码 }", ""},
+	}
+	for _, tc := range cases {
+		text, format := splitTextFormat(tc.in)
+		if text != tc.text || format != tc.format {
+			t.Errorf("splitTextFormat(%q) = (%q, %q), want (%q, %q)", tc.in, text, format, tc.text, tc.format)
+		}
+	}
+}
+
 func TestSplitColon(t *testing.T) {
 	got := splitColon("a::b:c")
 	want := []string{"a:b", "c"}

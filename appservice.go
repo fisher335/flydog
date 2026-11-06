@@ -11,7 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"flydog/internal/ipmsg"
+	"neiwangtong/internal/ipmsg"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
@@ -22,6 +22,9 @@ type App struct {
 	engine  *ipmsg.Engine
 	logPath string
 	window  *application.WebviewWindow
+
+	shareMu sync.Mutex
+	share   *shareServer
 
 	quitting atomic.Bool
 	trayMode atomic.Bool
@@ -36,18 +39,21 @@ func NewApp() *App {
 
 // ServiceStartup is called by Wails when the service starts.
 func (a *App) ServiceStartup(ctx context.Context, options application.ServiceOptions) error {
-	logPath := filepath.Join(os.TempDir(), "flydog.log")
+	logPath := filepath.Join(os.TempDir(), "neiwangtong.log")
 	if f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644); err == nil {
 		log.SetOutput(f)
 		a.logPath = logPath
 	}
-	log.Printf("==== FlyDog 启动 %s ====", time.Now().Format("2006-01-02 15:04:05"))
+	migrateLegacyData()
+	migrateLegacyAutostart()
+	log.Printf("==== 内网通 启动 %s ====", time.Now().Format("2006-01-02 15:04:05"))
 	return nil
 }
 
 // ServiceShutdown is called by Wails when the app is closing.
 func (a *App) ServiceShutdown() error {
 	a.Stop()
+	a.StopShare()
 	return nil
 }
 
@@ -65,7 +71,7 @@ func (a *App) trayEnabled() bool { return a.trayMode.Load() }
 
 func (a *App) markQuit() { a.quitting.Store(true) }
 
-// GetAutostart reports whether FlyDog is registered to launch at login.
+// GetAutostart reports whether 内网通 is registered to launch at login.
 func (a *App) GetAutostart() bool {
 	app := application.Get()
 	if app == nil || app.Autostart == nil {
@@ -87,7 +93,10 @@ func (a *App) SetAutostart(enabled bool) error {
 	}
 	if enabled {
 		return app.Autostart.EnableWithOptions(application.AutostartOptions{
-			Arguments: []string{"--hidden"},
+			// The app name is Chinese, so give the registry value a stable
+			// ASCII identifier instead of Wails' derived slug.
+			Identifier: "neiwangtong",
+			Arguments:  []string{"--hidden"},
 		})
 	}
 	return app.Autostart.Disable()
@@ -124,14 +133,57 @@ type UserConfig struct {
 	NightOffAdapter string `json:"nightOffAdapter"`
 	NightOffStart   string `json:"nightOffStart"`
 	NightOffEnd     string `json:"nightOffEnd"`
+
+	// Shared folder (HTTP, LAN only)
+	ShareDir         string `json:"shareDir"`
+	SharePort        int    `json:"sharePort"`
+	ShareAllowUpload bool   `json:"shareAllowUpload"`
 }
 
-func configDir() string {
+func configBaseDir() string {
 	dir, err := os.UserConfigDir()
 	if err != nil || dir == "" {
 		dir = os.TempDir()
 	}
-	return filepath.Join(dir, "flydog")
+	return dir
+}
+
+func configDir() string {
+	return filepath.Join(configBaseDir(), "neiwangtong")
+}
+
+// legacyConfigDir is where builds named "FlyDog" stored their data.
+func legacyConfigDir() string {
+	return filepath.Join(configBaseDir(), "flydog")
+}
+
+// migrateLegacyData copies settings and history from the old data directory on
+// first launch under the new name. The old directory is left untouched because
+// scheduled night-off tasks installed by the old build still reference its
+// script; those tasks are migrated when the schedule is re-applied.
+func migrateLegacyData() {
+	newDir := configDir()
+	if _, err := os.Stat(filepath.Join(newDir, "config.json")); err == nil {
+		return
+	}
+	oldDir := legacyConfigDir()
+	if _, err := os.Stat(oldDir); err != nil {
+		return
+	}
+	if err := os.MkdirAll(newDir, 0o755); err != nil {
+		return
+	}
+	for _, name := range []string{"config.json", "history.json", "nightoff.log"} {
+		dst := filepath.Join(newDir, name)
+		if _, err := os.Stat(dst); err == nil {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(oldDir, name))
+		if err != nil {
+			continue
+		}
+		_ = os.WriteFile(dst, b, 0o644)
+	}
 }
 
 func configPath() string {
@@ -172,14 +224,11 @@ func (a *App) SaveHistory(msgs []HistoryMsg) error {
 		msgs = msgs[len(msgs)-maxKeep:]
 	}
 	p := historyPath()
-	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-		return err
-	}
 	b, err := json.Marshal(msgs)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(p, b, 0o644)
+	return writeFileAtomic(p, b, 0o644)
 }
 
 // ClearHistory removes the persisted chat history.
@@ -190,12 +239,14 @@ func (a *App) ClearHistory() error {
 func defaultUserConfig() UserConfig {
 	host, _ := os.Hostname()
 	return UserConfig{
-		Name:           host,
-		DownloadDir:    defaultDownloadDir(),
-		AutoReceive:    true,
-		MinimizeToTray: true,
-		NightOffStart:  "22:00",
-		NightOffEnd:    "06:00",
+		Name:             host,
+		DownloadDir:      defaultDownloadDir(),
+		AutoReceive:      true,
+		MinimizeToTray:   true,
+		NightOffStart:    "22:00",
+		NightOffEnd:      "06:00",
+		SharePort:        defaultSharePort,
+		ShareAllowUpload: true,
 	}
 }
 
@@ -217,6 +268,9 @@ func (a *App) LoadConfig() UserConfig {
 	if cfg.NightOffEnd == "" {
 		cfg.NightOffEnd = "06:00"
 	}
+	if cfg.SharePort == 0 {
+		cfg.SharePort = defaultSharePort
+	}
 	a.trayMode.Store(cfg.MinimizeToTray)
 	return cfg
 }
@@ -225,22 +279,55 @@ func (a *App) LoadConfig() UserConfig {
 func (a *App) SaveConfig(cfg UserConfig) error {
 	a.trayMode.Store(cfg.MinimizeToTray)
 	p := configPath()
-	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-		return err
-	}
 	b, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(p, b, 0o644)
+	return writeFileAtomic(p, b, 0o644)
+}
+
+// writeFileAtomic writes data to a temp file in the same directory and renames
+// it over path, so a crash mid-write cannot leave a truncated config/history
+// file behind.
+func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	f, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	cleanup := func() { _ = os.Remove(tmp) }
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		cleanup()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		cleanup()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		cleanup()
+		return err
+	}
+	_ = os.Chmod(tmp, perm)
+	if err := os.Rename(tmp, path); err != nil {
+		cleanup()
+		return err
+	}
+	return nil
 }
 
 func defaultDownloadDir() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return "flydog-downloads"
+		return "neiwangtong-downloads"
 	}
-	return filepath.Join(home, "Downloads", "FlyDog")
+	return filepath.Join(home, "Downloads", "内网通")
 }
 
 // Start launches the LAN engine.

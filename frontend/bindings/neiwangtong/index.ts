@@ -10,5 +10,6 @@ export type {
     HistoryMsg,
     NetAdapter,
     NightOffRuns,
+    ShareInfo,
     UserConfig
 } from "./models.js";

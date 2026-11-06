@@ -33,7 +33,14 @@ export function ClearHistory(): $CancellablePromise<void> {
 }
 
 /**
- * GetAutostart reports whether FlyDog is registered to launch at login.
+ * CopyText writes text to the system clipboard.
+ */
+export function CopyText(text: string): $CancellablePromise<void> {
+    return $Call.ByID(2798394763, text);
+}
+
+/**
+ * GetAutostart reports whether 内网通 is registered to launch at login.
  */
 export function GetAutostart(): $CancellablePromise<boolean> {
     return $Call.ByID(2754093072);
@@ -44,6 +51,13 @@ export function GetAutostart(): $CancellablePromise<boolean> {
  */
 export function GetMembers(): $CancellablePromise<ipmsg$0.Member[] | null> {
     return $Call.ByID(3740613402);
+}
+
+/**
+ * GetShareInfo returns the current share state.
+ */
+export function GetShareInfo(): $CancellablePromise<$models.ShareInfo> {
+    return $Call.ByID(1736681014);
 }
 
 /**
@@ -103,7 +117,7 @@ export function NightOffNow(index: number, enable: boolean): $CancellablePromise
 }
 
 /**
- * NightOffStatus 报告计划任务是否已注册。
+ * NightOffStatus 报告计划任务是否已注册（兼容旧版 FlyDog 任务名）。
  */
 export function NightOffStatus(): $CancellablePromise<boolean> {
     return $Call.ByID(1907689584);
@@ -114,6 +128,13 @@ export function NightOffStatus(): $CancellablePromise<boolean> {
  */
 export function OpenDownloadDir(dir: string): $CancellablePromise<void> {
     return $Call.ByID(31883692, dir);
+}
+
+/**
+ * OpenURL opens a link in the system browser.
+ */
+export function OpenURL(raw: string): $CancellablePromise<void> {
+    return $Call.ByID(3584934946, raw);
 }
 
 /**
@@ -223,8 +244,23 @@ export function Start(name: string, downloadDir: string, autoReceive: boolean): 
 }
 
 /**
+ * StartShare serves dir over HTTP. When allowUpload is true, visitors can also
+ * upload files into the folder.
+ */
+export function StartShare(dir: string, port: number, allowUpload: boolean): $CancellablePromise<$models.ShareInfo> {
+    return $Call.ByID(186826862, dir, port, allowUpload);
+}
+
+/**
  * Stop shuts the engine down.
  */
 export function Stop(): $CancellablePromise<void> {
     return $Call.ByID(4158193117);
+}
+
+/**
+ * StopShare stops the HTTP server.
+ */
+export function StopShare(): $CancellablePromise<$models.ShareInfo> {
+    return $Call.ByID(2881641328);
 }

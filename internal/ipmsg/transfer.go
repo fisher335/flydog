@@ -2,6 +2,8 @@ package ipmsg
 
 import (
 	"bufio"
+	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -43,11 +45,12 @@ func (e *Engine) SendFiles(ip string, port int, text string, paths []string) ([]
 		}
 		e.mu.Lock()
 		e.outgoing[outKey(packetNo, fi.ID)] = &outgoing{
-			path:   p,
-			info:   fi,
-			isDir:  isDir,
-			remote: ip,
-			utf8:   utf8Mode,
+			path:    p,
+			info:    fi,
+			isDir:   isDir,
+			remote:  ip,
+			utf8:    utf8Mode,
+			created: time.Now(),
 		}
 		e.mu.Unlock()
 		files = append(files, fi)
@@ -73,6 +76,17 @@ func (e *Engine) lookupOutgoing(packetNo, fileID uint32) *outgoing {
 	return e.outgoing[outKey(packetNo, fileID)]
 }
 
+// purgeOutgoing drops offers that were never (or no longer) requested.
+func (e *Engine) purgeOutgoing(maxAge time.Duration) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for k, o := range e.outgoing {
+		if time.Since(o.created) > maxAge {
+			delete(e.outgoing, k)
+		}
+	}
+}
+
 // ---- TCP file server ----
 
 func (e *Engine) tcpLoop() {
@@ -93,14 +107,10 @@ func (e *Engine) tcpLoop() {
 
 func (e *Engine) serveConn(conn net.Conn) {
 	defer conn.Close()
-	_ = conn.SetDeadline(time.Now().Add(10 * time.Minute))
 
-	buf := make([]byte, 512)
-	n, err := conn.Read(buf)
-	if err != nil || n == 0 {
-		return
-	}
-	pkt, err := ParsePacket(buf[:n])
+	// The request is a single unframed packet; don't wait forever for one.
+	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	pkt, err := readFileRequest(conn)
 	if err != nil {
 		return
 	}
@@ -124,19 +134,99 @@ func (e *Engine) serveConn(conn net.Conn) {
 	if out == nil {
 		return
 	}
+	// Rolling deadlines: an absolute deadline would cut off large files or
+	// folders on slow links, while a per-write deadline still detects a dead
+	// peer.
+	w := idleTimeoutConn{Conn: conn, timeout: 2 * time.Minute}
 	switch GetMode(pkt.Command) {
 	case CmdGetFileData:
 		if out.isDir {
 			return
 		}
-		e.sendFileData(conn, out, offset)
+		e.sendFileData(w, out, offset)
 	case CmdGetDirFiles:
 		if !out.isDir {
 			// Some clients request files via GETDIRFILES too.
-			e.sendFileData(conn, out, offset)
+			e.sendFileData(w, out, offset)
 			return
 		}
-		e.sendDirData(conn, out)
+		e.sendDirData(w, out)
+	}
+}
+
+// idleTimeoutConn applies a fresh deadline to every read and write, so a slow
+// but healthy transfer keeps going while a dead peer still fails quickly.
+type idleTimeoutConn struct {
+	net.Conn
+	timeout time.Duration
+}
+
+func (c idleTimeoutConn) Read(p []byte) (int, error) {
+	_ = c.Conn.SetReadDeadline(time.Now().Add(c.timeout))
+	return c.Conn.Read(p)
+}
+
+func (c idleTimeoutConn) Write(p []byte) (int, error) {
+	_ = c.Conn.SetWriteDeadline(time.Now().Add(c.timeout))
+	return c.Conn.Write(p)
+}
+
+// readFileRequest reads one IPMSG packet from a file-transfer connection.
+// These packets are not length-framed: the header ends at the fifth ':', and
+// the additional section is collected until it looks complete for the command.
+func readFileRequest(conn net.Conn) (*Packet, error) {
+	br := bufio.NewReaderSize(conn, 4096)
+	var buf []byte
+	for i := 0; i < 5; i++ {
+		part, err := br.ReadBytes(HostListSeparator)
+		if err != nil {
+			return nil, err
+		}
+		buf = append(buf, part...)
+		if len(buf) > MaxHeader {
+			return nil, errBadPacket
+		}
+	}
+	headLen := len(buf)
+	pkt, err := ParsePacket(buf)
+	if err != nil {
+		return nil, err
+	}
+	for !fileRequestExtraComplete(pkt, buf[headLen:]) {
+		if n := br.Buffered(); n > 0 {
+			b, _ := br.Peek(n)
+			buf = append(buf, b...)
+			_, _ = br.Discard(n)
+			continue
+		}
+		_ = conn.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+		tmp := make([]byte, 512)
+		n, rerr := br.Read(tmp)
+		if n > 0 {
+			buf = append(buf, tmp[:n]...)
+			if len(buf) > MaxHeader {
+				return nil, errBadPacket
+			}
+		}
+		if rerr != nil {
+			break
+		}
+	}
+	return ParsePacket(buf)
+}
+
+// fileRequestExtraComplete reports whether the additional section has all the
+// fields this command needs. GETFILEDATA is "packetNo:fileID[:offset]";
+// GETDIRFILES is "packetNo:fileID". Clients that omit the optional offset make
+// readFileRequest wait out its short deadline instead.
+func fileRequestExtraComplete(pkt *Packet, extra []byte) bool {
+	switch GetMode(pkt.Command) {
+	case CmdGetFileData:
+		return bytes.Count(extra, []byte{HostListSeparator}) >= 2
+	case CmdGetDirFiles:
+		return bytes.Count(extra, []byte{HostListSeparator}) >= 1
+	default:
+		return true
 	}
 }
 
@@ -334,7 +424,7 @@ func (e *Engine) receiveOne(peer Member, packetNo uint32, fi FileInfo, dest stri
 		return
 	}
 	defer conn.Close()
-	_ = conn.SetDeadline(time.Now().Add(30 * time.Minute))
+	conn = idleTimeoutConn{Conn: conn, timeout: 2 * time.Minute}
 
 	cmd := CmdGetFileData
 	var extra string
@@ -363,15 +453,15 @@ func (e *Engine) receiveOne(peer Member, packetNo uint32, fi FileInfo, dest stri
 	}
 
 	if fi.IsDir() {
-		e.recvDir(conn, dest, fi, utf8Mode)
+		e.recvDir(conn, dest, fi, utf8Mode, packetNo)
 		return
 	}
-	e.recvFile(conn, dest, fi)
+	e.recvFile(conn, dest, fi, packetNo)
 }
 
-func (e *Engine) recvFile(conn net.Conn, dest string, fi FileInfo) {
+func (e *Engine) recvFile(conn net.Conn, dest string, fi FileInfo, packetNo uint32) {
 	tr := Transfer{
-		ID:        fmt.Sprintf("recv:%d:%d", fi.ID, fi.ID),
+		ID:        fmt.Sprintf("recv:%x:%x", packetNo, fi.ID),
 		Direction: "recv",
 		Peer:      "",
 		Name:      fi.Name,
@@ -381,7 +471,7 @@ func (e *Engine) recvFile(conn net.Conn, dest string, fi FileInfo) {
 	e.emitTransfer(tr)
 
 	target := filepath.Join(dest, safeName(fi.Name))
-	f, err := os.Create(target)
+	f, err := createUnique(target)
 	if err != nil {
 		tr.State = StateError
 		tr.Error = err.Error()
@@ -415,6 +505,14 @@ func (e *Engine) recvFile(conn net.Conn, dest string, fi FileInfo) {
 			e.emitTransfer(tr)
 			return
 		}
+		if n == 0 {
+			// Read returning (0, nil) would spin this loop forever; a healthy
+			// connection reports either data or an error, so treat it as closed.
+			tr.State = StateError
+			tr.Error = "连接已关闭"
+			e.emitTransfer(tr)
+			return
+		}
 	}
 	tr.Done = tr.Size
 	tr.State = StateDone
@@ -422,9 +520,9 @@ func (e *Engine) recvFile(conn net.Conn, dest string, fi FileInfo) {
 }
 
 // recvDir parses the hierarchical stream and writes it below dest.
-func (e *Engine) recvDir(conn net.Conn, dest string, fi FileInfo, utf8Mode bool) {
+func (e *Engine) recvDir(conn net.Conn, dest string, fi FileInfo, utf8Mode bool, packetNo uint32) {
 	tr := Transfer{
-		ID:        fmt.Sprintf("recv:dir:%x", fi.ID),
+		ID:        fmt.Sprintf("recv:%x:%x", packetNo, fi.ID),
 		Direction: "recv",
 		Name:      fi.Name,
 		State:     StateRunning,
@@ -493,7 +591,7 @@ func writeN(r io.Reader, path string, n int64) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	f, err := os.Create(path)
+	f, err := createUnique(path)
 	if err != nil {
 		return err
 	}
@@ -503,6 +601,28 @@ func writeN(r io.Reader, path string, n int64) error {
 	}
 	_, err = io.CopyN(f, r, n)
 	return err
+}
+
+// createUnique opens path for writing, inserting " (n)" before the extension
+// when the name is already taken, so an incoming transfer never silently
+// overwrites an earlier one. O_EXCL makes the check atomic.
+func createUnique(path string) (*os.File, error) {
+	ext := filepath.Ext(path)
+	base := strings.TrimSuffix(path, ext)
+	for i := 0; i < 10000; i++ {
+		p := path
+		if i > 0 {
+			p = fmt.Sprintf("%s (%d)%s", base, i, ext)
+		}
+		f, err := os.OpenFile(p, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+		if err == nil {
+			return f, nil
+		}
+		if !errors.Is(err, os.ErrExist) {
+			return nil, err
+		}
+	}
+	return nil, fmt.Errorf("无法创建文件（名称冲突过多）: %s", path)
 }
 
 func safeName(name string) string {

@@ -1,13 +1,13 @@
 [Desktop Entry]
 Version=1.0
-Name=My Product
-Comment=A flydog application
+Name=内网通
+Comment=局域网通讯与文件传输
 # The Exec line includes %u to pass the URL to the application
-Exec=/usr/local/bin/flydog.exe %u
+Exec=/usr/local/bin/neiwangtong %u
 Terminal=false
 Type=Application
-Icon=flydog.exe
+Icon=neiwangtong
 Categories=Utility;
-StartupWMClass=flydog.exe
+StartupWMClass=neiwangtong
 
  

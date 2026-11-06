@@ -28,8 +28,8 @@ func main() {
 	svc := NewApp()
 
 	app := application.New(application.Options{
-		Name:        "FlyDog",
-		Description: "局域网消息 / 文件传输",
+		Name:        "内网通",
+		Description: "局域网通讯与文件传输",
 		Icon:        appIcon,
 		Services: []application.Service{
 			application.NewService(svc),
@@ -38,7 +38,7 @@ func main() {
 			Handler: application.AssetFileServerFS(assets),
 		},
 		SingleInstance: &application.SingleInstanceOptions{
-			UniqueID: "com.flydog.lan",
+			UniqueID: "com.neiwangtong.lan",
 			OnSecondInstanceLaunch: func(data application.SecondInstanceData) {
 				svc.showWindow()
 			},
@@ -49,7 +49,7 @@ func main() {
 	})
 
 	win := app.Window.NewWithOptions(application.WebviewWindowOptions{
-		Title:            "FlyDog",
+		Title:            "内网通",
 		Width:            1060,
 		Height:           760,
 		MinWidth:         880,
@@ -74,7 +74,7 @@ func main() {
 	// 系统托盘
 	tray := app.SystemTray.New()
 	tray.SetIcon(appIcon)
-	tray.SetTooltip("FlyDog 局域网传输")
+	tray.SetTooltip("内网通 · 局域网传输")
 	menu := app.NewMenu()
 	menu.Add("显示主窗口").OnClick(func(*application.Context) { svc.showWindow() })
 	menu.AddSeparator()
@@ -89,7 +89,10 @@ func main() {
 		svc.showWindow()
 	})
 
-	app.OnShutdown(func() { svc.Stop() })
+	app.OnShutdown(func() {
+		svc.Stop()
+		svc.StopShare()
+	})
 
 	if err := app.Run(); err != nil {
 		log.Fatal(err)
